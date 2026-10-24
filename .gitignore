@@ -1,0 +1,23 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Secrets & local env
+.env
+.venv/
+venv/
+
+# Lean 4 build artifacts
+.lake/
+
+# Local archives
+*.zip
+
+# Explicitly track manifest and specification PDF
+!MANIFEST_SHA256.txt
+!paper/specification.pdf
