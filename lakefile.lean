@@ -2,7 +2,7 @@ import Lake
 open Lake DSL
 
 package «shark_protocol» where
-  -- Shark Protocol v1.1.0 Formal Verification Package (Lean 4 + Mathlib)
+  -- Shark Protocol v1.1.2 Formal Verification Package (Lean 4 + Mathlib)
 
 require mathlib from git
   "https://github.com/leanprover-community/mathlib4.git"

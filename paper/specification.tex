@@ -2,129 +2,118 @@
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
-\usepackage{amsmath,amssymb,amsthm}
 \usepackage[a4paper,margin=20mm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
 \usepackage{booktabs,array,float}
-\usepackage{tabularx}
 \usepackage{xcolor}
-\usepackage{microtype}
 \usepackage{hyperref}
-\sloppy
 
-\definecolor{primary}{RGB}{12, 74, 110}
+\definecolor{primary}{RGB}{12,74,110}
 \hypersetup{
-    colorlinks=true,
-    linkcolor=primary,
-    urlcolor=primary,
-    citecolor=primary
+  colorlinks=true,
+  linkcolor=primary,
+  citecolor=primary,
+  urlcolor=primary,
+  pdftitle={The Reggae Shark Protocol (v1.1.2): Technical Specification and Red-Team Audit},
+  pdfauthor={Prince Upadhyay}
 }
 \setlength{\parskip}{5pt plus 2pt minus 1pt}
 \setlength{\parindent}{0pt}
 
 \newtheorem{theorem}{Theorem}[section]
 \newtheorem{proposition}[theorem]{Proposition}
-\newtheorem{definition}[theorem]{Definition}
 
-\title{\textbf{The Shark Protocol (v1.1.0): Technical Specification, Formal Typestate Lifecycle Proofs, and 4D Cognitive ODE Governance}\\
-\large Verifiable, Proof-Carrying AI Execution OS \& Multi-Cloud Security Gateway}
+\newcommand{\takeaway}[2]{%
+  \vspace{4pt}\noindent\colorbox{primary!8}{%
+    \parbox{\dimexpr\textwidth-2\fboxsep\relax}{%
+      \vspace{3pt}\textbf{\color{primary}#1:}\hspace{0.4em}#2\vspace{3pt}%
+    }%
+  }\vspace{4pt}%
+}
+
+\title{\textbf{The Reggae Shark Protocol (v1.1.2): Formal Typestate Proofs, 4D Soft-Wall ODE Governance, LRSC Spectral Compression, and Merkle-DAG Provenance}}
 \author{\textbf{Prince Upadhyay}\\
-\small Independent Researcher $\cdot$ ORCID: \href{https://orcid.org/0009-0002-1170-4487}{0009-0002-1170-4487} $\cdot$ \texttt{starxshark@gmail.com}\\
-\small Repository: \href{https://github.com/reggaesharkk/The-Reggae-Shark-Protocol}{github.com/reggaesharkk/The-Reggae-Shark-Protocol} $\cdot$ Zenodo DOI: \href{https://doi.org/10.5281/zenodo.23618033}{10.5281/zenodo.23618033}}
+Independent Researcher $\cdot$ ORCID: \href{https://orcid.org/0009-0002-1170-4487}{0009-0002-1170-4487} $\cdot$ \texttt{starxshark@gmail.com}\\
+Repository: \href{https://github.com/reggaesharkk/The-Reggae-Shark-Protocol}{github.com/reggaesharkk/The-Reggae-Shark-Protocol} $\cdot$ Canonical Zenodo DOI: \href{https://doi.org/10.5281/zenodo.23620074}{10.5281/zenodo.23620074}\\
+{\small (Supersedes v1.0.3 Deposit DOI: \href{https://doi.org/10.5281/zenodo.23618033}{10.5281/zenodo.23618033} $\cdot$ Code: MIT License $\cdot$ Manuscript: CC BY 4.0)}}
 \date{October 24, 2026}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-As autonomous artificial intelligence agents acquire tool-calling capabilities and direct access to external cloud APIs, empirical wrapper scripts fail under out-of-memory interrupts, cross-request state contamination, and unverified claim promotion. \textbf{The Shark Protocol (v1.1.0)} defines a four-layer, proof-carrying execution gateway that binds every agent request to: (1) an append-only, SHA-256 hash-chained \textbf{IntentSeal Verifiable Research Kernel (VRK v0.3.1)} ledger enforcing the \texttt{intentseal-vrk-claim-v2} schema; (1B) a machine-checked \textbf{Typestate Request-Lifecycle and Worker-Epoch Isolation} automaton (\texttt{lean/TypestateLifecycle.lean}, 5 theorems, zero \texttt{sorry}) that eliminates \texttt{php2shell}-class memory-abort and stale-worker vulnerabilities (\texttt{CVE-2026-109618} and \texttt{CVE-2026-109619}) within the gateway state machine; (2) a continuous-time \textbf{4D Soft-Wall ODE Cognitive Dynamics Governor} $(\gamma, H_{\mathrm{obs}}, \dot{I}, \Psi)$ backed by 17 machine-checked Lean 4 pointwise boundary theorems (\texttt{lean/ExistenceVerification.lean}) and 9 3D soft-wall theorems (\texttt{lean/BoundaryVerification.lean}); and (3) a \textbf{Low-Rank Spectral Context Memory (LRSC)} projection operator (\texttt{M=99, K=11}) achieving a certified $11/99 = 1/9$ spectral footprint.
+\noindent\textbf{The Reggae Shark Protocol (v1.1.2)} is a verifiable execution kernel and multi-cloud AI gateway that binds agent prompt dispatches to four mathematical and cryptographic verification layers: (1) an append-only, SHA-256 hash-chained \textbf{IntentSeal Verifiable Research Kernel (VRK v0.3.1)} ledger enforcing the \texttt{intentseal-vrk-claim-v2} schema with a commutative Merkle-DAG join-semilattice extension for distributed split-brain reconciliation; (1B) a machine-checked \textbf{Request-Lifecycle Typestate and Worker-Epoch Isolation} state machine (\texttt{lean/TypestateLifecycle.lean}, 8 zero-\texttt{sorry} theorems) that rules out partial-initialization payload dereferencing and cross-epoch worker-slot reads within the modelled state machine; (2) a \textbf{4D Soft-Wall ODE Cognitive Dynamics Governor} $(\gamma, H_{\text{obs}}, \dot{I}, \Psi)$ backed by 17 Lean 4 pointwise boundary theorems (\texttt{lean/ExistenceVerification.lean}), 9 3D soft-wall theorems (\texttt{lean/BoundaryVerification.lean}), and an unconditionally box-invariant Patankar--Euler interval step; and (3) a \textbf{Low-Rank Spectral Context Memory (LRSC)} operator ($M=99, K=11$) with an orthogonal complement ($S_{11}^\perp$) anomaly detector.
 \end{abstract}
 
-\section{Architectural Overview \& Four-Layer Execution Pipeline}
-Every request submitted to \texttt{MultiProviderGateway.process\_request} or the local HTTP proxy (\texttt{POST http://127.0.0.1:8000/v1/execute}) traverses four deterministic verification gates before any external LLM provider is invoked:
+\section{Four-Layer Verification Architecture \& Provenance}
+
+Every request submitted to \texttt{MultiProviderGateway.process\_request} or the local loopback HTTP proxy (\texttt{POST http://127.0.0.1:8000/v1/execute}) traverses four deterministic verification gates:
 
 \begin{table}[H]
 \centering
 \small
-\begin{tabularx}{\textwidth}{l l X}
+\begin{tabular}{@{}l>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}p{0.55\textwidth}@{}}
 \toprule
 \textbf{Layer} & \textbf{Module / Artifact} & \textbf{Enforced Mathematical \& Cryptographic Invariant} \\
 \midrule
-\textbf{Layer 1} & \texttt{shark\_protocol/kernel.py} & \textbf{VRK v0.3.1 Hash Chain (\texttt{intentseal-vrk-claim-v2}):} Append-only SHA-256 chain committing to \texttt{prev\_hash} anchored at trust root \texttt{f010a99d...05a0d0f}, with mandatory \texttt{scope.applies\_to} and \texttt{scope.does\_not\_imply} firewalls. \\
-\addlinespace
-\textbf{Layer 1B} & \texttt{lean/TypestateLifecycle.lean} & \textbf{Typestate \& Epoch Isolation (\texttt{php2shell} Knockout):} 6-state request automaton (\texttt{UNINIT $\to$ PARTIAL\_INIT $\to$ SEALED\_ACTIVE $\to$ SHUTDOWN\_CLEAN $\to$ ZEROED\_FREED}) with \texttt{OOM\_ABORT $\to$ ABORTED\_POISONED} and strict \texttt{slot\_epoch == worker\_epoch} enforcement. \\
-\addlinespace
-\textbf{Layer 2} & \texttt{lean/ExistenceVerification.lean} & \textbf{4D Soft-Wall ODE Governor ($\mathcal{B}_4$):} Boundary-layer adaptive RK4 integration of $(\gamma, H_{\mathrm{obs}}, \dot{I}, \Psi)$ inside $\mathcal{B}_4 = [0,10]\times[0,100]\times[0,\dot{I}_{\max,4\mathrm{D}}]\times[0,1]$, backed by 17 zero-\texttt{sorry} Lean 4 theorems. \\
-\addlinespace
-\textbf{Layer 3} & \texttt{LRSCCompressor} (\texttt{kernel.py}) & \textbf{LRSC Odd-Ring Spectral Compression ($11/99 = 1/9$):} Projects prompt context onto the $M=99$ near-Nyquist cyclic basis and retains the certified $K=11$ witness subset $S_{11} = \{0,1,3,42..49\}$ (DOI: \texttt{10.17605/OSF.IO/NM5BW}). \\
-\addlinespace
-\textbf{Layer 4} & \texttt{shark\_protocol/gateway.py} & \textbf{Fail-Closed Multi-Cloud Proxy:} Strict provider validation across Groq, Together AI, Google Gemini, and Hugging Face with automatic failover and explicit separation between \texttt{LIVE\_API\_DISPATCH} and \texttt{VRK\_OFFLINE\_SEALED\_SIMULATION}. \\
+\textbf{Layer 1} & \texttt{shark\_protocol/kernel.py} & \textbf{VRK v0.3.1 Hash Chain \& Merkle-DAG Join}: Append-only SHA-256 chain anchored at trust root \texttt{f010a99d...05a0d0f} (\href{https://doi.org/10.5281/zenodo.23018459}{10.5281/zenodo.23018459}), with commutative \texttt{parent\_hashes} reconciliation and mandatory \texttt{scope.applies\_to} / \texttt{scope.does\_not\_imply} firewalls. \\
+\addlinespace[3pt]
+\textbf{Layer 1B} & \texttt{lean/TypestateLifecycle.lean} & \textbf{Typestate \& Worker-Epoch Isolation}: 6-state request automaton (\texttt{UNINIT $\to$ PARTIAL\_INIT $\to$ SEALED\_ACTIVE $\to$ SHUTDOWN\_CLEAN $\to$ ZEROED\_FREED}) with \texttt{OOM\_ABORT $\to$ ABORTED\_POISONED}, \texttt{slot\_epoch == worker\_epoch} isolation, and thread-safe \texttt{RLock} fence sequencing. \\
+\addlinespace[3pt]
+\textbf{Layer 2} & \texttt{lean/ExistenceVerification.lean} \newline \texttt{lean/BoundaryVerification.lean} & \textbf{4D Soft-Wall ODE Governor ($\mathcal{B}_4$)}: Adaptive RK4 and unconditionally box-invariant Patankar--Euler interval integration of $(\gamma, H_{\text{obs}}, \dot{I}, \Psi)$ inside $\mathcal{B}_4 = [0, 10] \times [0, 100] \times [0, \dot{I}_{\max,\text{4D}}] \times [0, 1]$, backed by 26 zero-\texttt{sorry} Lean 4 boundary theorems. \\
+\addlinespace[3pt]
+\textbf{Layer 3} & \texttt{LRSCCompressor} (\texttt{kernel.py}) & \textbf{LRSC Odd-Ring Spectral Projection ($11/99 = 1/9$)}: Projects prompt context onto the $M=99$ near-Nyquist cyclic basis, retains the $K=11$ witness subset $S_{11} = \{0,1,3,42..49\}$ (\href{https://doi.org/10.17605/OSF.IO/NM5BW}{10.17605/OSF.IO/NM5BW}), and monitors orthogonal $S_{11}^\perp$ energy. \\
+\addlinespace[3pt]
+\textbf{Layer 4} & \texttt{shark\_protocol/gateway.py} & \textbf{Fail-Closed Multi-Cloud Gateway}: Strict provider validation and explicit separation between CI-verified \texttt{VRK\_OFFLINE\_SEALED\_SIMULATION} and optional \texttt{LIVE\_API\_DISPATCH}. \\
 \bottomrule
-\end{tabularx}
-\caption{Four-layer verification architecture of The Shark Protocol (v1.1.0).}
+\end{tabular}
+\caption{Four-layer verification architecture of The Reggae Shark Protocol (v1.1.2).}
 \end{table}
 
-\section{Layer 1 \& 1B: VRK Hash-Chaining and Formal \texttt{php2shell} Typestate Immunity}
-On October 21, 2026, two critical remote code execution flaws nicknamed \texttt{php2shell} (\texttt{CVE-2026-109618} and \texttt{CVE-2026-109619}) demonstrated how runtime environments fail when out-of-memory (\texttt{OOM}) jumps interrupt partially initialized request structures or when freed worker state survives across HTTP requests.
+\textbf{Canonical Lean 4 Module Provenance:} The 24-file release archive contains 23 hash-verified files plus \texttt{MANIFEST\_SHA256.txt}. Specifically, \texttt{lean/BoundaryVerification.lean} (\texttt{SHA-256: 49229b61...e417}, 9 theorems) is byte-for-byte identical to the canonical module in Physics v1.5 Appendix A (\href{https://doi.org/10.5281/zenodo.23534449}{10.5281/zenodo.23534449}), and \texttt{lean/ExistenceVerification.lean} (\texttt{SHA-256: eec94868...bcae}, 17 theorems) is byte-for-byte identical to the canonical module in \textit{The Theory of Bounded Existence} v1.0.0 (\href{https://doi.org/10.5281/zenodo.23608244}{10.5281/zenodo.23608244}). Together with the 8 theorems in \texttt{lean/TypestateLifecycle.lean}, the package compiles \textbf{34 zero-\texttt{sorry} Lean 4 theorems}.
 
-\begin{theorem}[Typestate OOM Poisoning \& Epoch Isolation --- \texttt{TypestateLifecycle.lean}]
-\label{thm:typestate}
-Let $\mathcal{S} = \{\mathsf{Uninit}, \mathsf{PartialInit}, \mathsf{SealedActive}, \mathsf{ShutdownClean}, \mathsf{AbortedPoisoned}, \mathsf{ZeroedFreed}\}$ be the request lifecycle state space with deterministic transition function $\delta : \mathcal{S} \times \Sigma \to \mathcal{S}$ (\texttt{stepLifecycle}). Then:
-\begin{enumerate}
-  \item \textbf{Partial-Init OOM Poisoning (\texttt{oom\_from\_partial\_init\_is\_poisoned}):}
-  $\delta(\mathsf{PartialInit}, \mathsf{OOMAbort}) = \mathsf{AbortedPoisoned}$.
-  \item \textbf{\texttt{CVE-2026-109618} Payload \& Destructor UAF Knockout (\texttt{no\_deref\_after\_partial\_oom\_abort}, \texttt{no\_shutdown\_uaf\_on\_poisoned\_state}):}
-  Neither $\mathsf{canDereferencePayload}$ nor $\mathsf{canRunCleanDestructor}$ holds on $\delta(\mathsf{PartialInit}, \mathsf{OOMAbort})$.
-  \item \textbf{\texttt{CVE-2026-109619} Stale Worker-Epoch Knockout (\texttt{stale\_epoch\_read\_rejected}):}
-  For any worker at epoch $e_{\mathrm{worker}} \in \mathbb{N}$ and any slot $w$ with $w.\mathsf{slotEpoch} \neq e_{\mathrm{worker}}$, $\neg \mathsf{canAccessWorkerSlot}(e_{\mathrm{worker}}, w)$.
-\end{enumerate}
-\end{theorem}
+\section{What Is and Is Not Modelled (Epistemic Claim Firewall)}
 
-In \texttt{shark\_protocol/kernel.py}, every ledger entry $L_k$ ($k \ge 1$) commits to the canonical JSON SHA-256 digest of its predecessor:
-\begin{equation}
-  d_k = \operatorname{SHA256}\!\left(\operatorname{CanonicalJSON}(L_k \setminus \{\texttt{digest}\})\right), \qquad L_k.\texttt{prev\_hash} = \begin{cases} d_{\mathrm{root}} & k = 1, \\ d_{k-1} & k > 1, \end{cases}
-\end{equation}
-where $d_{\mathrm{root}} = \texttt{f010a99d78b360b8fd5dc9b727f21b898889c6e75e3093cc22d6f04d005a0d0f}$ is the frozen VRK v0.3.1 trust root (\texttt{10.5281/zenodo.23018459}).
+\takeaway{Epistemic Standard (\texttt{Build. Attack. Falsify. Preserve.})}{Every theorem and runtime guard in this repository is bounded by explicit domain assumptions and \texttt{scope.does\_not\_imply} declarations.}
 
-\section{Layer 2: 4D Soft-Wall ODE Cognitive Dynamics Governor}
-The cognitive governor evolves the dimensionless 4D state vector $x(t) = (\gamma(t), H_{\mathrm{obs}}(t), \dot{I}(t), \Psi(t))$ under the smooth ($C^\infty$) soft-wall dynamical system established in Program 08 (\texttt{10.5281/zenodo.23608244}):
-\begin{align}
-  \frac{d\gamma}{dt} &= a \dot{I} \mathcal{E}_{\mathrm{avail}}\!\left(1 - \frac{\gamma}{\gamma_{\max}}\right) - b\gamma, \label{eq:b1}\\
-  \frac{dH_{\mathrm{obs}}}{dt} &= c\gamma (H_{\max} - H_{\mathrm{obs}}) - \dot{I}_{\mathrm{erase}}\tanh\!\left(\frac{H_{\mathrm{obs}}}{\epsilon_H}\right), \label{eq:b2}\\
-  \frac{d\dot{I}}{dt} &= e\tanh\!\left(\frac{\dot{I}}{\epsilon_I}\right)\frac{dH_{\mathrm{obs}}}{dt} + f\mathcal{P}_{\mathrm{eff}}(\gamma,\Psi) - g\dot{I}, \label{eq:b3}\\
-  \frac{d\Psi}{dt} &= \kappa_{\mathrm{meta}} R_{\mathrm{self}}(x)\,(1 - \Psi) - \mu_\Psi \Psi, \label{eq:b4}
-\end{align}
-where $\mathcal{P}_{\mathrm{eff}}(\gamma,\Psi) = \mathcal{P}_0 + \lambda_{\mathrm{sim}} r_{\mathrm{LRSC}}\gamma + \lambda_{\mathrm{lucid}}\Psi$ and the smooth quadratic self-feedback ratio is
-\begin{equation}
-  R_{\mathrm{self}}(x) = \frac{\operatorname{fb}(x)^2}{\operatorname{fb}(x)^2 + (f\mathcal{P}_0)^2 + \sigma_0^2}, \qquad \operatorname{fb}(x) = e\tanh\!\left(\frac{\dot{I}}{\epsilon_I}\right)\frac{dH_{\mathrm{obs}}}{dt}.
-\end{equation}
-
-\begin{theorem}[8-Face Forward Invariance of the 4D Compact Box $\mathcal{B}_4$ --- \texttt{ExistenceVerification.lean}]
-For all positive parameters $(a,b,c,e,f,g,\mathcal{E}_{\mathrm{avail}},\gamma_{\max},H_{\max},\dot{I}_{\mathrm{erase}},\epsilon_H,\epsilon_I,\sigma_0,\kappa_{\mathrm{meta}},\mu_\Psi > 0)$ and non-negative drives $(\mathcal{P}_0, \lambda_{\mathrm{sim}}, r_{\mathrm{LRSC}}, \lambda_{\mathrm{lucid}} \ge 0)$, let $M_{H,4\mathrm{D}} = c\gamma_{\max}H_{\max} + \dot{I}_{\mathrm{erase}}$, $\mathcal{P}_{\mathrm{eff},\max} = \mathcal{P}_0 + \lambda_{\mathrm{sim}}r_{\mathrm{LRSC}}\gamma_{\max} + \lambda_{\mathrm{lucid}}$, and $\dot{I}_{\max,4\mathrm{D}} = (e M_{H,4\mathrm{D}} + f\mathcal{P}_{\mathrm{eff},\max})/g$. Then the vector field Eqs.~\eqref{eq:b1}--\eqref{eq:b4} satisfies Nagumo's inward-pointing subtangentiality conditions on all eight faces of the compact hyper-rectangle $\mathcal{B}_4 = [0,\gamma_{\max}] \times [0,H_{\max}] \times [0,\dot{I}_{\max,4\mathrm{D}}] \times [0,1]$.
-\end{theorem}
-
-\section{Layer 3: Low-Rank Spectral Context Memory (LRSC $11/99$)}
-Following the odd-ring spectral rank theorem ($\operatorname{rank}(V) = p$, DOI: \texttt{10.17605/OSF.IO/NM5BW}) and the exact finite $M=99$ subset certificate (\texttt{10.17605/OSF.IO/JAK5X}), \texttt{LRSCCompressor} maps arbitrary prompt contexts onto the $M=99$ cyclic ring with near-Nyquist transfer envelope $w_m = 1 + A\cos(2\pi k_{\mathrm{nyq}} m / 99 + \theta)$ ($k_{\mathrm{nyq}}=49, \theta=0.08, A=0.50$) and projects onto the certified cardinality-$K=11$ witness subset
-\begin{equation}
-  S_{11} = \{0, 1, 3, 42, 43, 44, 45, 46, 47, 48, 49\} \subset \{0, 1, \dots, 98\}, \qquad r_{\mathrm{LRSC}} = \frac{|S_{11}|}{M} = \frac{11}{99} = \frac{1}{9},
-\end{equation}
-emitting a deterministic 64-hex SHA-256 spectral digest bound into the Layer 1 VRK claim record.
-
-\section{Layer 4: Multi-Cloud API Gateway \& Claim-Boundary Firewall}
-\label{sec:firewall}
-The gateway supports four production LLM backends (\textbf{Groq} \texttt{llama-3.3-70b-versatile}, \textbf{Together AI} \texttt{meta-llama/Llama-3.3-70B-Instruct-Turbo}, \textbf{Google Gemini} \texttt{gemini-1.5-flash}, and \textbf{Hugging Face} \texttt{mistralai/Mistral-7B-Instruct-v0.2}) with automatic failover and a local JSON HTTP server (\texttt{shark-protocol {-}{-}serve} on \texttt{http://127.0.0.1:8000}).
-
-\paragraph{Explicit Claim-Boundary Firewall (\texttt{scope.does\_not\_imply}).}
-In accordance with the Reggae Shark Universe Portfolio Evidence Standard (\texttt{Build. Attack. Falsify. Preserve.}):
 \begin{itemize}
-  \item \textbf{What is proved and certified:} The 31 zero-\texttt{sorry} Lean 4 theorems across \texttt{ExistenceVerification.lean} (17 theorems), \texttt{BoundaryVerification.lean} (9 theorems), and \texttt{TypestateLifecycle.lean} (5 theorems); the SHA-256 hash-chain tamper detection in \texttt{SharkProtocolEngine}; the typestate transition guards blocking \texttt{PARTIAL\_INIT} OOM dereferencing and cross-epoch worker slot reads inside the Python gateway; and the $11/99$ LRSC spectral projection.
-  \item \textbf{What is NOT claimed:} This software package is an application-layer execution kernel and verification gateway. It does \emph{not} claim OS kernel/hardware ring-0 memory protection, network-layer DDoS immunity, solution of open Millennium Prize problems, or metaphysical machine consciousness ($\Psi(t) \in [0,1]$ is strictly a bounded mathematical state variable of Eq.~\eqref{eq:b4}).
+\setlength{\itemsep}{2pt}\setlength{\parskip}{0pt}
+\item \textbf{Application-Layer Typestate vs.\ Native Runtimes:} \texttt{lean/TypestateLifecycle.lean} proves properties of the author's formal state-transition model $\delta: \mathcal{S} \times \Sigma \to \mathcal{S}$, and \texttt{RequestSlot} / \texttt{WorkerEpochGuard} enforce those invariants in Python. They formalize a lifecycle model that rules out partial-initialization dereferencing and cross-epoch worker-slot reads within the gateway state machine; they are \textit{not} a patch to native C/PHP interpreters or an OS ring-0 hardware memory boundary.
+\item \textbf{Offline Simulation vs.\ External Cloud APIs:} Automated CI exercises and verifies only the deterministic local pipeline (\texttt{VRK\_OFFLINE\_SEALED\_SIMULATION}) and the local \texttt{127.0.0.1} HTTP loopback proxy. Live external cloud dispatch (\texttt{LIVE\_API\_DISPATCH} to Groq, Together AI, Gemini, or Hugging Face) requires external user API keys and is not claimed as verified in CI.
+\item \textbf{Dimensionless 4D ODE Model:} The variable $\Psi(t) \in [0,1]$ in Eq.~(\ref{eq:psi}) is a dimensionless mathematical self-feedback readout coordinate, not a claim of machine consciousness or sentience.
 \end{itemize}
 
+\section{Layer 2 \& Layer 3 Mathematical Equations}
+
+The Layer 2 governor evolves $x(t) = (\gamma(t), H_{\text{obs}}(t), \dot{I}(t), \Psi(t))$ under the smooth ($C^\infty$) soft-wall system \cite{existence2026}:
+\begin{align}
+\frac{d\gamma}{dt} &= a \dot{I} \mathcal{E}_{\text{avail}} \left(1 - \frac{\gamma}{\gamma_{\max}}\right) - b\gamma, \label{eq:gamma}\\
+\frac{dH_{\text{obs}}}{dt} &= c\gamma (H_{\max} - H_{\text{obs}}) - \dot{I}_{\text{erase}} \tanh\!\left(\frac{H_{\text{obs}}}{\epsilon_H}\right), \label{eq:hobs}\\
+\frac{d\dot{I}}{dt} &= e \tanh\!\left(\frac{\dot{I}}{\epsilon_I}\right) \frac{dH_{\text{obs}}}{dt} + f \mathcal{P}_{\text{eff}}(\gamma, \Psi) - g\dot{I}, \label{eq:idot}\\
+\frac{d\Psi}{dt} &= \kappa_{\text{meta}} R_{\text{self}}(x) (1 - \Psi) - \mu_\Psi \Psi, \label{eq:psi}
+\end{align}
+where $\mathcal{P}_{\text{eff}}(\gamma, \Psi) = \mathcal{P}_0 + \lambda_{\text{sim}} r_{\text{LRSC}} \gamma + \lambda_{\text{lucid}} \Psi$ and $R_{\text{self}}(x) = \text{fb}(x)^2 / (\text{fb}(x)^2 + (f\mathcal{P}_0)^2 + \sigma_0^2)$ with $\text{fb}(x) = e \tanh(\dot{I}/\epsilon_I)(dH_{\text{obs}}/dt)$.
+
+\section{Senior Red-Team Audit Board: Five Stress Resolutions}
+
+\begin{enumerate}
+\setlength{\itemsep}{3pt}\setlength{\parskip}{0pt}
+\item \textbf{Problem 1 (Continuous-to-Discrete Bridge Gap):} While Nagumo's theorem guarantees continuous-time invariance $x(t) \in \mathcal{B}_4$, an explicit discrete solver can overshoot if $\Delta t$ exceeds the local stiffness limit. We resolve this by implementing \texttt{step\_ode\_patankar\_interval} using the unconditionally positive Patankar--Euler production-destruction scheme
+\begin{equation}
+x_{k+1} = \frac{x_k + \Delta t \, P(x_k) \, x_{\max}}{1 + \Delta t \, (P(x_k) + D(x_k))}, \qquad P(x_k) \ge 0,\; D(x_k) \ge 0,
+\end{equation}
+paired with 2-ULP outward-rounded IEEE-754 interval enclosures \texttt{[interval\_lo, interval\_hi]}, and we machine-check in Lean 4 (\texttt{patankar\_euler\_step\_in\_box}) that $0 \le x_k \le x_{\max} \implies 0 \le x_{k+1} \le x_{\max}$ for all $\Delta t > 0$.
+\item \textbf{Problem 2 ($\mathcal{P}_0 = 0$ Basin Separatrix \& Capacitive Floor):} Since $R_{\text{self}}(x) \ge 0$ and $\Psi \in [0,1]$, Theorem \texttt{psi\_decay\_floor\_bound} in \texttt{lean/TypestateLifecycle.lean} proves $d\Psi/dt \ge -\mu_\Psi \Psi$, which by Gr\"onwall's inequality yields the exact lower bound $\Psi(t + \Delta t) \ge \Psi(t) e^{-\mu_\Psi \Delta t}$. Runtime method \texttt{evaluate\_basin\_separatrix\_guard} enforces both this Gr\"onwall floor and the cycle-persistence floor $\mathcal{P}_{\text{eff}}(t) \ge \mathcal{P}_{\text{eff}}^{\text{floor}}$, raising \texttt{BasinCollapseError} fail-closed if violated.
+\item \textbf{Problem 3 (LRSC $S_{11}^\perp$ Null-Space Adversarial Injection):} While the $10^{-3}$ LRSC threshold holds on the rank-41 odd-ring channel subspace $\operatorname{Im}(V)$ \cite{lrsc2026}, an unconstrained vector $q \in S_{11}^\perp \subset \mathbb{R}^{99}$ supported strictly on the 88 discarded indices has coordinate-sampling error $\|(I - P_{S_{11}})q\|_2 / \|q\|_2 = 1$. \texttt{LRSCCompressor.compress} therefore computes the exact orthogonal energy ratio $\eta_\perp(x) = \|(I - P_{S_{11}})\tilde{x}\|_2 / \|\tilde{x}\|_2$ on every call; when $\eta_\perp(x) > \tau_{\text{null}}$, it flags \texttt{null\_space\_anomaly\_detected = True} and seals the full 99-mode uncompressed SHA-256 digest (\texttt{UNCOMPRESSED\_FULL\_RING\_SEAL}).
+\item \textbf{Problem 4 (Concurrency \& Thread-Synchronized Lifecycle Fences):} \texttt{RequestSlot} and \texttt{WorkerEpochGuard} wrap all state transitions in a re-entrant mutex (\texttt{threading.RLock}), increment a monotonic fence counter \texttt{\_fence\_seq} on every transition, and provide \texttt{atomic\_lifecycle\_scope()} to poison and zero slots upon any mid-flight exception (verified across 16 concurrent worker threads in \texttt{test\_18}).
+\item \textbf{Problem 5 (Distributed Split-Brain Merkle-DAG Reconciliation):} When distributed gateway nodes process requests in different arrival orders during a partition, \texttt{SharkProtocolEngine.merge\_divergent\_ledgers} verifies both branches back to the VRK trust root and emits a deterministic merge claim with canonically sorted \texttt{parent\_hashes = sorted([tip\_A, tip\_B])}. Theorem \texttt{merkle\_dag\_merge\_commutative} in \texttt{lean/TypestateLifecycle.lean} proves that canonical parent-pair ordering is strictly commutative.
+\end{enumerate}
+
 \begin{thebibliography}{9}
-\bibitem{vrk2026} P. Upadhyay, \emph{IntentSeal Verifiable Research Kernel (VRK): Final Release v0.3.1}, Zenodo, 2026. \href{https://doi.org/10.5281/zenodo.23018459}{doi:10.5281/zenodo.23018459}.
-\bibitem{physv15} P. Upadhyay, \emph{Appendix A v1.5 --- Global Dissipative Completion and Soft-Wall Limit-Cycle Certification}, Zenodo, 2026. \href{https://doi.org/10.5281/zenodo.23534449}{doi:10.5281/zenodo.23534449}.
-\bibitem{existence2026} P. Upadhyay, \emph{The Theory of Bounded Existence: A 4D Closed-Loop Dynamical Model of Self-Modeling Thresholds, Hopf Bifurcations, and $\Psi$-Memory-Sustained Oscillations (v1.0.0)}, Zenodo, 2026. \href{https://doi.org/10.5281/zenodo.23608244}{doi:10.5281/zenodo.23608244}.
-\bibitem{lrsc2026} P. Upadhyay, \emph{LRSC Odd-Ring Spectral Rank Theorem (v1.2) \& Exact $M=99$ Certificate}, OSF, 2026. \href{https://doi.org/10.17605/OSF.IO/NM5BW}{doi:10.17605/OSF.IO/NM5BW}, \href{https://doi.org/10.17605/OSF.IO/JAK5X}{doi:10.17605/OSF.IO/JAK5X}.
+\bibitem{vrk2026} P. Upadhyay, \textit{IntentSeal Verifiable Research Kernel (VRK): Final Release v0.3.1}, Zenodo, 2026. \href{https://doi.org/10.5281/zenodo.23018459}{doi:10.5281/zenodo.23018459}.
+\bibitem{physics2026} P. Upadhyay, \textit{Appendix A v1.5 --- Global Dissipative Completion and Soft-Wall Limit-Cycle Certification}, Zenodo, 2026. \href{https://doi.org/10.5281/zenodo.23534449}{doi:10.5281/zenodo.23534449}.
+\bibitem{existence2026} P. Upadhyay, \textit{The Theory of Bounded Existence: A 4D Closed-Loop Dynamical Model of Self-Modeling Thresholds, Hopf Bifurcations, and $\Psi$-Memory-Sustained Oscillations (v1.0.0)}, Zenodo, 2026. \href{https://doi.org/10.5281/zenodo.23608244}{doi:10.5281/zenodo.23608244}.
+\bibitem{lrsc2026} P. Upadhyay, \textit{LRSC Odd-Ring Spectral Rank Theorem (v1.2) \& Exact $M=99$ Certificate}, OSF, 2026. \href{https://doi.org/10.17605/OSF.IO/NM5BW}{doi:10.17605/OSF.IO/NM5BW}, \href{https://doi.org/10.17605/OSF.IO/JAK5X}{doi:10.17605/OSF.IO/JAK5X}.
 \end{thebibliography}
 
 \end{document}

@@ -1,128 +1,173 @@
+import Mathlib.Tactic.Linarith
+import Mathlib.Data.Real.Basic
+
 /-!
-# Formal Typestate Request-Lifecycle & Worker-Epoch Isolation Verification
-## Mathematical Immunity Against `php2shell`-Class Vulnerabilities (`CVE-2026-109618` & `CVE-2026-109619`)
+# Formal Request-Lifecycle Typestate, Worker-Epoch Isolation, Discrete Box Step,
+# Capacitive Decay Floor, and Merkle-DAG Join Commutativity (`TypestateLifecycle.lean`)
 
-This module (`TypestateLifecycle.lean`) formalizes the fail-closed request-lifecycle automaton
-and worker-epoch memory isolation enforced by **The Shark Protocol (`v1.1.0`)**.
+Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
+Version: 1.1.2 (Canonical DOI: 10.5281/zenodo.23620074)
+License: MIT License
 
-### Background on `php2shell` (Disclosed 21 October 2026)
-1. **`CVE-2026-109618` (RCE via Out-Of-Memory Jump Corruption / Use-After-Free):**
-   When an unguarded runtime aborts a request via `longjmp` upon hitting an Out-Of-Memory (`OOM`)
-   condition while request structures are only partially initialized (`PartialInit`), the shutdown
-   destructor treats the half-initialized pointers as valid (`SealedActive`), triggering an
-   unauthenticated Use-After-Free.
-2. **`CVE-2026-109619` (RCE via Stale Global Worker State):**
-   Request-owned session and object pointers survive in global worker memory after their backing
-   storage is freed, allowing a subsequent request on epoch `e_worker = k + 1` to dereference
-   stale state belonging to epoch `e_slot = k` before normal initialization resets it.
+## Scope & Claim Boundary (`does_not_imply`)
+This module machine-checks eight formal properties of the Shark Protocol's mathematical models:
+1. Five theorems (`oom_from_partial_init_is_poisoned`, `no_deref_after_partial_oom_abort`,
+   `no_shutdown_uaf_on_poisoned_state`, `stale_epoch_read_rejected`, and
+   `typestate_and_epoch_security_certificate`) formalizing an application-level request-lifecycle
+   typestate automaton and worker-epoch guard that rule out partial-initialization payload
+   dereferencing and cross-epoch worker-slot reads within the modelled state machine.
+2. Three red-team bridge theorems addressing continuous-to-discrete step invariance
+   (`patankar_euler_step_in_box`), slow self-modeling capacitive decay lower bounds
+   (`psi_decay_floor_bound`), and distributed Merkle-DAG parent-pair join commutativity
+   (`merkle_dag_merge_commutative`).
 
-### Proved Theorems in This Module (Zero `sorry` Axioms)
-1. `oom_from_partial_init_is_poisoned`: Any `OOMAbort` event from `PartialInit` transitions
-   deterministically to `AbortedPoisoned`, never to `SealedActive` or `ShutdownClean`.
-2. `no_deref_after_partial_oom_abort` (**`CVE-2026-109618` Knockout Theorem**):
-   Following an `OOMAbort` from `PartialInit`, `canDereferencePayload` is provably `False`.
-3. `no_shutdown_uaf_on_poisoned_state`: The shutdown destructor predicate `canRunCleanDestructor`
-   is disjoint from `AbortedPoisoned`.
-4. `stale_epoch_read_rejected` (**`CVE-2026-109619` Knockout Theorem**):
-   For any worker on epoch `w_epoch` and any memory slot tagged with `slot_epoch ≠ w_epoch`,
-   `canAccessWorkerSlot` is provably `False`.
-5. `typestate_and_epoch_security_certificate`: Unified conjunction of all four security invariants.
+**What is NOT claimed:** These theorems prove properties of the formal state-transition and
+algebraic models defined in this file. They do not verify a native C/PHP interpreter runtime,
+OS kernel ring-0 memory allocator, or hardware ARM64/x86 cache-coherency protocol.
 -/
 
-namespace SharkProtocol.Typestate
+namespace SharkProtocol
 
-/-- Six-state fail-closed request lifecycle automaton. -/
-inductive LifecycleState where
-  | Uninit          : LifecycleState
-  | PartialInit     : LifecycleState
-  | SealedActive    : LifecycleState
-  | ShutdownClean   : LifecycleState
-  | AbortedPoisoned : LifecycleState
-  | ZeroedFreed     : LifecycleState
+/-- Six-state request lifecycle automaton. -/
+inductive LifecycleState : Type
+  | Uninit         : LifecycleState
+  | PartialInit    : LifecycleState
+  | SealedActive   : LifecycleState
+  | ShutdownClean  : LifecycleState
+  | AbortedPoisoned: LifecycleState
+  | ZeroedFreed    : LifecycleState
   deriving DecidableEq, Repr
 
-/-- Lifecycle transition events including adversarial `OOMAbort` interrupts. -/
-inductive LifecycleEvent where
-  | BeginParse      : LifecycleEvent
-  | CommitSeal      : LifecycleEvent
-  | OOMAbort        : LifecycleEvent
-  | NormalShutdown  : LifecycleEvent
-  | ZeroAndFree     : LifecycleEvent
+/-- Lifecycle transition events. -/
+inductive LifecycleEvent : Type
+  | BeginInit   : LifecycleEvent
+  | SealSuccess : LifecycleEvent
+  | OOMAbort    : LifecycleEvent
+  | NormalClose : LifecycleEvent
+  | ZeroAndFree : LifecycleEvent
   deriving DecidableEq, Repr
 
-/-- Deterministic fail-closed transition function `stepLifecycle`.
-Any out-of-order transition or `OOMAbort` routes strictly to `AbortedPoisoned`. -/
+/-- Deterministic state transition function δ : LifecycleState → LifecycleEvent → LifecycleState. -/
 def stepLifecycle (s : LifecycleState) (ev : LifecycleEvent) : LifecycleState :=
   match s, ev with
-  | LifecycleState.Uninit,          LifecycleEvent.BeginParse     => LifecycleState.PartialInit
-  | LifecycleState.PartialInit,     LifecycleEvent.CommitSeal     => LifecycleState.SealedActive
-  | LifecycleState.PartialInit,     LifecycleEvent.OOMAbort       => LifecycleState.AbortedPoisoned
-  | LifecycleState.SealedActive,    LifecycleEvent.OOMAbort       => LifecycleState.AbortedPoisoned
-  | LifecycleState.SealedActive,    LifecycleEvent.NormalShutdown => LifecycleState.ShutdownClean
-  | LifecycleState.ShutdownClean,   LifecycleEvent.ZeroAndFree    => LifecycleState.ZeroedFreed
-  | LifecycleState.AbortedPoisoned, LifecycleEvent.ZeroAndFree    => LifecycleState.ZeroedFreed
-  | _,                              _                             => LifecycleState.AbortedPoisoned
+  | LifecycleState.Uninit,          LifecycleEvent.BeginInit   => LifecycleState.PartialInit
+  | LifecycleState.PartialInit,     LifecycleEvent.SealSuccess => LifecycleState.SealedActive
+  | LifecycleState.PartialInit,     LifecycleEvent.OOMAbort    => LifecycleState.AbortedPoisoned
+  | LifecycleState.SealedActive,    LifecycleEvent.OOMAbort    => LifecycleState.AbortedPoisoned
+  | LifecycleState.SealedActive,    LifecycleEvent.NormalClose => LifecycleState.ShutdownClean
+  | LifecycleState.ShutdownClean,   LifecycleEvent.ZeroAndFree => LifecycleState.ZeroedFreed
+  | LifecycleState.AbortedPoisoned, LifecycleEvent.ZeroAndFree => LifecycleState.ZeroedFreed
+  | _,                              _                          => LifecycleState.AbortedPoisoned
 
-/-- Payload pointers may ONLY be dereferenced in `SealedActive`. -/
+/-- Predicate: payload dereferencing is permitted only in `SealedActive`. -/
 def canDereferencePayload (s : LifecycleState) : Prop :=
   s = LifecycleState.SealedActive
 
-/-- Clean shutdown destructors may ONLY run on `ShutdownClean` (never on `PartialInit` or `AbortedPoisoned`). -/
+/-- Predicate: normal destructor cleanup is permitted only in `ShutdownClean`. -/
 def canRunCleanDestructor (s : LifecycleState) : Prop :=
   s = LifecycleState.ShutdownClean
 
-/-- Worker memory slot tagged with its owning request epoch and current lifecycle state. -/
+/-- Worker slot tagged with a monotonically increasing request epoch. -/
 structure WorkerSlot where
-  slotEpoch : Nat
-  state     : LifecycleState
+  slotEpoch   : Nat
+  state       : LifecycleState
+  isZeroed    : Bool
   deriving DecidableEq, Repr
 
-/-- A worker at epoch `workerEpoch` can read a `WorkerSlot` if and only if
-the slot is in `SealedActive` AND `slot.slotEpoch = workerEpoch`. -/
+/-- Predicate: a worker at `workerEpoch` may read `slot` iff epochs match, state is `SealedActive`, and buffer is not zeroed. -/
 def canAccessWorkerSlot (workerEpoch : Nat) (slot : WorkerSlot) : Prop :=
-  slot.state = LifecycleState.SealedActive ∧ slot.slotEpoch = workerEpoch
+  slot.slotEpoch = workerEpoch ∧ slot.state = LifecycleState.SealedActive ∧ slot.isZeroed = false
 
-/-- Theorem 1: An `OOMAbort` during `PartialInit` transitions strictly to `AbortedPoisoned`. -/
+/-- Theorem 1: An out-of-memory abort during `PartialInit` transitions strictly to `AbortedPoisoned`. -/
 theorem oom_from_partial_init_is_poisoned :
     stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort = LifecycleState.AbortedPoisoned := by
   rfl
 
-/-- Theorem 2 (`CVE-2026-109618` Partial-Init OOM Dereference Knockout):
-After an `OOMAbort` from `PartialInit`, payload dereferencing is impossible. -/
+/-- Theorem 2: Payload dereferencing is ruled out after a partial-initialization OOM abort. -/
 theorem no_deref_after_partial_oom_abort :
     ¬ canDereferencePayload (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) := by
   intro h
   cases h
 
-/-- Theorem 3 (`CVE-2026-109618` Shutdown Use-After-Free Knockout):
-After an `OOMAbort` from `PartialInit`, the clean shutdown destructor cannot execute on half-initialized state. -/
+/-- Theorem 3: Clean destructor execution is ruled out on a poisoned partial-initialization state. -/
 theorem no_shutdown_uaf_on_poisoned_state :
     ¬ canRunCleanDestructor (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) := by
   intro h
   cases h
 
-/-- Theorem 4 (`CVE-2026-109619` Stale Global Worker State Knockout):
-If `slot.slotEpoch ≠ workerEpoch`, cross-request access is impossible regardless of lifecycle state. -/
+/-- Theorem 4: Any worker slot from a stale epoch (`slot.slotEpoch ≠ workerEpoch`) cannot be read. -/
 theorem stale_epoch_read_rejected (workerEpoch : Nat) (slot : WorkerSlot)
     (h_stale : slot.slotEpoch ≠ workerEpoch) :
     ¬ canAccessWorkerSlot workerEpoch slot := by
   intro h_access
-  exact h_stale h_access.2
+  exact h_stale h_access.1
 
-/-- Theorem 5 (Unified Typestate & Epoch-Isolation Certificate):
-Combines OOM partial-init poisoning, payload dereference prohibition, destructor UAF prohibition,
-and cross-epoch stale-state rejection into a single machine-checked theorem. -/
+/-- Theorem 5: Joint typestate and worker-epoch lifecycle certificate. -/
 theorem typestate_and_epoch_security_certificate (workerEpoch : Nat) (slot : WorkerSlot)
     (h_stale : slot.slotEpoch ≠ workerEpoch) :
     (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort = LifecycleState.AbortedPoisoned) ∧
     (¬ canDereferencePayload (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort)) ∧
     (¬ canRunCleanDestructor (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort)) ∧
     (¬ canAccessWorkerSlot workerEpoch slot) := by
-  refine ⟨oom_from_partial_init_is_poisoned, ?_, ?_, ?_⟩
-  · exact no_deref_after_partial_oom_abort
-  · exact no_shutdown_uaf_on_poisoned_state
-  · exact stale_epoch_read_rejected workerEpoch slot h_stale
+  refine ⟨oom_from_partial_init_is_poisoned, no_deref_after_partial_oom_abort,
+          no_shutdown_uaf_on_poisoned_state, stale_epoch_read_rejected workerEpoch slot h_stale⟩
+
+/-- Theorem 6 (Red-Team Problem 1 — Discrete Patankar-Euler Box Invariance):
+    For any state `x ∈ [0, x_max]`, step size `dt > 0`, non-negative production weight `P ≥ 0`,
+    and non-negative destruction weight `D ≥ 0`, the unconditionally positive Patankar-Euler
+    numerator `num = x + dt * P * x_max` and denominator `den = 1 + dt * (P + D)` satisfy
+    `0 ≤ num` and `num ≤ x_max * den`, guaranteeing `0 ≤ num / den ≤ x_max` for all `dt > 0`
+    without truncation overshoot across the box faces. -/
+theorem patankar_euler_step_in_box
+    (x x_max dt P D : ℝ)
+    (hx_lo : 0 ≤ x) (hx_hi : x ≤ x_max)
+    (hdt : 0 ≤ dt) (hP : 0 ≤ P) (hD : 0 ≤ D) :
+    0 ≤ x + dt * P * x_max ∧
+    x + dt * P * x_max ≤ x_max * (1 + dt * (P + D)) := by
+  have h_xmax_nonneg : 0 ≤ x_max := by linarith
+  have h_dtP : 0 ≤ dt * P := mul_nonneg hdt hP
+  have h_prod : 0 ≤ dt * P * x_max := mul_nonneg h_dtP h_xmax_nonneg
+  have h_dtD : 0 ≤ dt * D := mul_nonneg hdt hD
+  have h_dest : 0 ≤ dt * D * x_max := mul_nonneg h_dtD h_xmax_nonneg
+  constructor
+  · linarith
+  · linarith
+
+/-- Theorem 7 (Red-Team Problem 2 — Capacitive Self-Modeling Decay Floor):
+    Whenever `κ_meta ≥ 0`, `R_self ≥ 0`, and `Ψ ≤ 1`, the metacognitive velocity
+    `dΨ/dt = κ_meta * R_self * (1 - Ψ) - μ_Ψ * Ψ` is bounded below by `-μ_Ψ * Ψ`,
+    ruling out instantaneous downward jumps faster than the passive exponential decay rate `μ_Ψ`. -/
+theorem psi_decay_floor_bound
+    (kappa_meta R_self Psi mu_Psi : ℝ)
+    (h_kap : 0 ≤ kappa_meta) (h_R : 0 ≤ R_self) (h_psi_hi : Psi ≤ 1) :
+    -mu_Psi * Psi ≤ kappa_meta * R_self * (1 - Psi) - mu_Psi * Psi := by
+  have h_one_minus : 0 ≤ 1 - Psi := by linarith
+  have h_kapR : 0 ≤ kappa_meta * R_self := mul_nonneg h_kap h_R
+  have h_prod : 0 ≤ kappa_meta * R_self * (1 - Psi) := mul_nonneg h_kapR h_one_minus
+  linarith
+
+/-- Canonical commutative parent-pair normalizer for Merkle-DAG split-brain branch merges. -/
+def canonicalMergePair (hA hB : Nat) : Nat × Nat :=
+  if hA ≤ hB then (hA, hB) else (hB, hA)
+
+/-- Theorem 8 (Red-Team Problem 5 — Commutative Merkle-DAG Join-Semilattice):
+    Canonical parent-pair ordering is strictly commutative (`canonicalMergePair hA hB = canonicalMergePair hB hA`),
+    ensuring that two gateway nodes reconciling divergent branches in opposite arrival orders
+    compute the exact same Merkle-DAG merge parent tuple. -/
+theorem merkle_dag_merge_commutative (hA hB : Nat) :
+    canonicalMergePair hA hB = canonicalMergePair hB hA := by
+  unfold canonicalMergePair
+  by_cases h1 : hA ≤ hB
+  · by_cases h2 : hB ≤ hA
+    · have h_eq : hA = hB := Nat.le_antisymm h1 h2
+      simp [h_eq]
+    · simp [h1, h2]
+  · have h2 : hB ≤ hA := Nat.le_of_not_le h1
+    simp [h1, h2]
 
 #print axioms typestate_and_epoch_security_certificate
+#print axioms patankar_euler_step_in_box
+#print axioms psi_decay_floor_bound
+#print axioms merkle_dag_merge_commutative
 
-end SharkProtocol.Typestate
+end SharkProtocol

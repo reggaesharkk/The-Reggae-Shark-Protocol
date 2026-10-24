@@ -1,16 +1,14 @@
 """
-Layer 4: Multi-Cloud Security Gateway & Local HTTP Proxy Server (`http://localhost:8000`).
+Layer 4: Fail-Closed Multi-Cloud Execution Gateway & Local Loopback HTTP Proxy (`shark_protocol/gateway.py`)
+Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
+Canonical DOI: 10.5281/zenodo.23620074
 
-Provides:
-- Fail-closed provider validation (`groq`, `together`, `gemini`, `huggingface`).
-- Complete 4-layer execution pipeline per request:
-  1. Layer 1B Typestate & Worker-Epoch Isolation (`UNINIT -> PARTIAL_INIT -> SEALED_ACTIVE`)
-  2. Layer 3 LRSC `M=99, K=11` (`1/9` footprint) spectral context compression
-  3. Layer 2 4D Soft-Wall ODE Governor step & 8-face `B_4` box verification
-  4. Layer 1 IntentSeal VRK `v0.3.1` hash-chained claim sealing
-- Real HTTP dispatch (`requests.post`) to Groq, Together AI, Google Gemini, and Hugging Face
-  when API keys are configured, with automatic multi-provider failover on network/API errors,
-  and transparent `[VRK_OFFLINE_SEALED_SIMULATION]` mode when keys are absent.
+What Is and Is Not Verified in CI:
+- The deterministic local verification pipeline (`VRK_OFFLINE_SEALED_SIMULATION`) and local
+  loopback HTTP server (`127.0.0.1`) are exercised and verified in the automated test suite.
+- External cloud provider dispatch (`LIVE_API_DISPATCH` across Groq, Together AI, Google Gemini,
+  and Hugging Face) is an optional runtime integration interface requiring user-supplied API keys
+  in `.env` and is not claimed as verified in offline CI runs.
 """
 
 from __future__ import annotations
@@ -18,268 +16,241 @@ from __future__ import annotations
 import json
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
 import requests
+from dotenv import load_dotenv
 
 from .kernel import (
-    LRSCCompressor,
+    LifecycleEvent,
     SharkProtocolEngine,
     TypestateViolationError,
-    VRKSchemaError,
 )
+
+load_dotenv()
+
+
+class GatewayConfigError(ValueError):
+    """Raised when an unsupported provider is requested."""
+
+
+SUPPORTED_PROVIDERS: Dict[str, Dict[str, str]] = {
+    "groq": {
+        "env_key": "GROQ_API_KEY",
+        "model": "llama-3.3-70b-versatile",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+    },
+    "together": {
+        "env_key": "TOGETHER_API_KEY",
+        "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "url": "https://api.together.ai/v1/chat/completions",
+    },
+    "gemini": {
+        "env_key": "GEMINI_API_KEY",
+        "model": "gemini-1.5-flash",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+    },
+    "huggingface": {
+        "env_key": "HUGGINGFACE_API_KEY",
+        "model": "mistralai/Mistral-7B-Instruct-v0.2",
+        "url": "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
+    },
+}
 
 
 class MultiProviderGateway:
-    """Fail-closed 4-provider LLM gateway governed by VRK v0.3.1, 4D ODEs, and LRSC 11/99."""
+    """
+    Four-layer execution gateway binding every request to:
+      1. Layer 1B: Thread-safe `WorkerEpochGuard` + `RequestSlot` typestate lifecycle
+      2. Layer 2 : 4D Soft-Wall ODE step (`step_ode` + `step_ode_patankar_interval`)
+      3. Layer 3 : LRSC 11/99 spectral compression (`LRSCCompressor` with null-space check)
+      4. Layer 1 : Append-only `intentseal-vrk-claim-v2` SHA-256 ledger seal
+    """
 
-    FAILOVER_ORDER: Tuple[str, ...] = ("groq", "together", "gemini", "huggingface")
+    def __init__(self, engine: Optional[SharkProtocolEngine] = None) -> None:
+        self.engine = engine if engine is not None else SharkProtocolEngine()
 
-    def __init__(self, api_keys: Optional[Dict[str, str]] = None) -> None:
-        self.engine = SharkProtocolEngine()
-        env_keys = {
-            "groq": os.getenv("GROQ_API_KEY", "").strip(),
-            "together": os.getenv("TOGETHER_API_KEY", "").strip(),
-            "gemini": os.getenv("GEMINI_API_KEY", "").strip(),
-            "huggingface": os.getenv("HUGGINGFACE_API_KEY", "").strip(),
-        }
-        if api_keys:
-            for k, v in api_keys.items():
-                env_keys[k.lower()] = (v or "").strip()
-        self.api_keys: Dict[str, str] = env_keys
+    @staticmethod
+    def _has_usable_key(env_var: str) -> Optional[str]:
+        val = os.environ.get(env_var, "").strip()
+        if not val or val.startswith("your_") or val.endswith("_here"):
+            return None
+        return val
 
-        self.models: Dict[str, str] = {
-            "groq": "llama-3.3-70b-versatile",
-            "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-            "gemini": "gemini-1.5-flash",
-            "huggingface": "mistralai/Mistral-7B-Instruct-v0.2",
-        }
-
-    def _call_provider_http(self, provider: str, prompt: str, key: str, timeout: float = 12.0) -> str:
-        """Execute a real HTTPS request to the specified LLM provider API."""
-        model = self.models[provider]
-        if provider == "groq":
+    def _dispatch_external_provider(self, provider: str, prompt: str, api_key: str) -> str:
+        spec = SUPPORTED_PROVIDERS[provider]
+        if provider in ("groq", "together"):
             resp = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2},
-                timeout=timeout,
+                spec["url"],
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": spec["model"], "messages": [{"role": "user", "content": prompt}], "max_tokens": 256},
+                timeout=15,
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
-
-        if provider == "together":
-            resp = requests.post(
-                "https://api.together.xyz/v1/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2},
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
-
+            return str(data["choices"][0]["message"]["content"])
         if provider == "gemini":
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
             resp = requests.post(
-                url,
+                f"{spec['url']}?key={api_key}",
                 headers={"Content-Type": "application/json"},
                 json={"contents": [{"parts": [{"text": prompt}]}]},
-                timeout=timeout,
+                timeout=15,
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
-
+            return str(data["candidates"][0]["content"]["parts"][0]["text"])
         if provider == "huggingface":
-            url = f"https://api-inference.huggingface.co/models/{model}"
             resp = requests.post(
-                url,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                spec["url"],
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"inputs": prompt},
-                timeout=timeout,
+                timeout=15,
             )
             resp.raise_for_status()
             data = resp.json()
-            if isinstance(data, list) and data and "generated_text" in data[0]:
-                return data[0]["generated_text"]
-            return json.dumps(data)
-
-        raise ValueError(f"Unsupported provider: {provider}")
+            if isinstance(data, list) and data:
+                return str(data[0].get("generated_text", ""))
+            return str(data)
+        raise GatewayConfigError(f"Unsupported provider: {provider}")
 
     def process_request(
         self,
-        provider: str,
         prompt: str,
-        enable_failover: bool = True,
-        simulate_oom: bool = False,
+        provider: str = "groq",
+        simulate_oom_abort: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Execute a prompt through all 4 architectural layers:
-        - Fail-closed provider check (rejects unknown providers instead of silently defaulting).
-        - Layer 1B Typestate & Epoch-Isolation gate (`UNINIT -> PARTIAL_INIT -> SEALED_ACTIVE`).
-        - Layer 3 LRSC `11/99` spectral context compression.
-        - Layer 2 4D Soft-Wall ODE Governor step & 8-face `B_4` box check.
-        - Layer 4 Live HTTP provider dispatch with automatic multi-cloud failover (or honest
-          `[VRK_OFFLINE_SEALED_SIMULATION]` when no API keys are configured).
-        """
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError("Prompt must be a non-empty string.")
-
         provider_norm = provider.strip().lower()
-        # Allow display names from UI ("together ai", "google gemini", "hugging face")
-        alias_map = {
-            "groq": "groq",
-            "together": "together",
-            "together ai": "together",
-            "gemini": "gemini",
-            "google gemini": "gemini",
-            "huggingface": "huggingface",
-            "hugging face": "huggingface",
-        }
-        if provider_norm not in alias_map:
-            raise ValueError(
-                f"Fail-closed provider rejection: unknown provider '{provider}'. "
-                f"Allowed providers: {list(self.models.keys())}."
+        if provider_norm not in SUPPORTED_PROVIDERS:
+            raise GatewayConfigError(
+                f"Fail-closed gateway error: unknown provider '{provider}'. "
+                f"Supported providers: {sorted(SUPPORTED_PROVIDERS.keys())}."
             )
-        primary_provider = alias_map[provider_norm]
 
-        # Layer 3: LRSC 11/99 Spectral Compression
-        lrsc_report = LRSCCompressor.compress_context(prompt)
-
-        # Layer 1B + Layer 2 + Layer 1: Begin request epoch, advance 4D ODE, seal VRK claim
-        slot = self.engine.begin_request_epoch(
-            payload={"provider": primary_provider, "prompt": prompt, "lrsc_digest": lrsc_report["spectral_digest"]},
-            simulate_oom_in_partial_init=simulate_oom,
-        )
-
+        slot = self.engine.epoch_guard.begin_request()
         try:
-            verified_payload = slot.read_payload(active_worker_epoch=self.engine.worker_epoch)
-            candidates: List[str] = [primary_provider]
-            if enable_failover:
-                for p_cand in self.FAILOVER_ORDER:
-                    if p_cand not in candidates:
-                        candidates.append(p_cand)
+            if simulate_oom_abort:
+                slot.transition(LifecycleEvent.OOM_ABORT)
+                raise TypestateViolationError("Simulated OOM abort during PARTIAL_INIT; request slot poisoned.")
 
+            ode_snapshot = self.engine.step_ode(dt=0.05)
+            lrsc_bundle = self.engine.lrsc.compress(prompt)
+
+            slot.transition(
+                LifecycleEvent.SEAL_SUCCESS,
+                payload={
+                    "prompt": prompt,
+                    "provider": provider_norm,
+                    "lrsc_sha256": lrsc_bundle["lrsc_sha256"],
+                    "ode_snapshot": ode_snapshot,
+                },
+            )
+            verified_payload = self.engine.epoch_guard.read_slot(slot)
+
+            # Determine whether live API dispatch is configured or offline simulation applies
             dispatch_mode = "VRK_OFFLINE_SEALED_SIMULATION"
-            active_provider = primary_provider
-            failover_log: List[str] = []
-            output_msg = ""
+            used_provider = provider_norm
+            response_text = (
+                f"[VRK_OFFLINE_SEALED_SIMULATION] Verified 4-layer execution for provider='{provider_norm}' "
+                f"(LRSC={lrsc_bundle['compression_ratio_exact']}, digest={lrsc_bundle['lrsc_sha256'][:12]}...)."
+            )
 
-            for cand in candidates:
-                key = self.api_keys.get(cand, "")
-                if not key:
-                    failover_log.append(f"{cand.upper()}: no API key configured")
-                    continue
-                try:
-                    live_text = self._call_provider_http(cand, verified_payload["prompt"], key)
-                    active_provider = cand
-                    dispatch_mode = "LIVE_API_DISPATCH"
-                    output_msg = f"[LIVE {cand.upper()} API RESPONSE ({self.models[cand]})]: {live_text}"
-                    break
-                except Exception as exc:
-                    failover_log.append(f"{cand.upper()}: error ({type(exc).__name__})")
+            candidate_order: List[str] = [provider_norm] + [
+                p for p in ("groq", "together", "gemini", "huggingface") if p != provider_norm
+            ]
+            for cand in candidate_order:
+                key = self._has_usable_key(SUPPORTED_PROVIDERS[cand]["env_key"])
+                if key is not None:
+                    try:
+                        response_text = self._dispatch_external_provider(cand, verified_payload["prompt"], key)
+                        dispatch_mode = "LIVE_API_DISPATCH"
+                        used_provider = cand
+                        break
+                    except Exception:
+                        continue
 
-            if dispatch_mode == "VRK_OFFLINE_SEALED_SIMULATION":
-                output_msg = (
-                    f"[VRK_OFFLINE_SEALED_SIMULATION] No live API keys configured; request cryptographically "
-                    f"sealed at Epoch {self.engine.worker_epoch} for {primary_provider.upper()} "
-                    f"({self.models[primary_provider]}), compressed via LRSC (11/99), and verified inside B_4."
-                )
+            vrk_entry = self.engine.seal_claim(
+                claim_id=f"gateway.exec.epoch_{slot.slot_epoch}",
+                claim_text=f"4-layer verified gateway execution (mode={dispatch_mode}, provider={used_provider}).",
+                claim_class="REPRODUCED_RESULT",
+                lrsc_digest=lrsc_bundle["lrsc_sha256"],
+            )
+            self.engine.epoch_guard.finish_request(slot, abort=False)
 
-            latest_claim = self.engine.ledger[-1]
-            ok_chain, chain_status = self.engine.verify_ledger_integrity()
-            if not ok_chain:
-                raise VRKSchemaError(f"Ledger integrity check failed: {chain_status}")
-
-        finally:
-            final_typestate = self.engine.finalize_request_epoch(slot)
-
-        return {
-            "status": "200_OK",
-            "dispatch_mode": dispatch_mode,
-            "provider": active_provider.upper(),
-            "requested_provider": primary_provider.upper(),
-            "target_model": self.models[active_provider],
-            "worker_epoch": self.engine.worker_epoch,
-            "typestate_final": final_typestate.value,
-            "layer1_vrk": (
-                f"SEALED [Digest: {latest_claim['digest'][:12]}... | "
-                f"Prev: {latest_claim['prev_hash'][:12]}... | "
-                f"LedgerIndex: {latest_claim['ledger_index']} | {chain_status}]"
-            ),
-            "layer1_claim": latest_claim,
-            "layer2_governor": self.engine.state,
-            "layer3_lrsc": lrsc_report,
-            "failover_trace": failover_log,
-            "output": output_msg,
-        }
+            return {
+                "status": "SEALED_OK",
+                "dispatch_mode": dispatch_mode,
+                "provider": used_provider,
+                "worker_epoch": slot.slot_epoch,
+                "slot_final_state": slot.state.value,
+                "slot_fence_seq": slot.fence_seq,
+                "ode_state": ode_snapshot,
+                "lrsc": lrsc_bundle,
+                "vrk_seal": vrk_entry,
+                "response": response_text,
+            }
+        except BaseException:
+            self.engine.epoch_guard.finish_request(slot, abort=True)
+            raise
 
 
-def make_gateway_handler(gateway: MultiProviderGateway):
-    """Create an HTTP request handler bound to `gateway` for `http://localhost:8000`."""
+def create_gateway_http_server(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    gateway: Optional[MultiProviderGateway] = None,
+) -> Tuple[HTTPServer, MultiProviderGateway]:
+    gw = gateway if gateway is not None else MultiProviderGateway()
 
-    class SharkGatewayHTTPHandler(BaseHTTPRequestHandler):
-        def _send_json(self, code: int, payload: Dict[str, Any]) -> None:
-            body = json.dumps(payload, indent=2).encode("utf-8")
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_GET(self) -> None:
-            if self.path == "/v1/health":
-                ok_chain, chain_status = gateway.engine.verify_ledger_integrity()
-                ok_box, box_status = gateway.engine.verify_box_invariance()
-                self._send_json(200, {
-                    "status": "OK" if (ok_chain and ok_box) else "ERROR",
-                    "version": "1.1.0",
-                    "worker_epoch": gateway.engine.worker_epoch,
-                    "ledger_status": chain_status,
-                    "box_status": box_status,
-                    "governor_state": gateway.engine.state,
-                })
-            elif self.path == "/v1/ledger/verify":
-                ok_chain, chain_status = gateway.engine.verify_ledger_integrity()
-                self._send_json(200 if ok_chain else 500, {
-                    "verified": ok_chain,
-                    "chain_status": chain_status,
-                    "entries": len(gateway.engine.ledger),
-                })
-            else:
-                self._send_json(404, {"error": "Endpoint not found. Use GET /v1/health or POST /v1/execute."})
-
-        def do_POST(self) -> None:
-            if self.path != "/v1/execute":
-                self._send_json(404, {"error": "Endpoint not found. Use POST /v1/execute."})
-                return
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-                raw = self.rfile.read(length).decode("utf-8") if length > 0 else "{}"
-                req = json.loads(raw)
-                provider = req.get("provider", "groq")
-                prompt = req.get("prompt", "")
-                res = gateway.process_request(provider=provider, prompt=prompt)
-                self._send_json(200, res)
-            except (ValueError, TypestateViolationError, VRKSchemaError) as exc:
-                self._send_json(400, {"status": "400_FAIL_CLOSED", "error": str(exc)})
-
+    class GatewayHTTPHandler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:
             return
 
-    return SharkGatewayHTTPHandler
+        def _send_json(self, code: int, payload: Dict[str, Any]) -> None:
+            raw = json.dumps(payload, sort_keys=True).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self) -> None:
+            if self.path == "/health":
+                ok, detail = gw.engine.verify_ledger_integrity()
+                self._send_json(200, {
+                    "status": "healthy" if ok else "degraded",
+                    "version": "1.1.2",
+                    "doi": "10.5281/zenodo.23620074",
+                    "vrk_chain_status": detail,
+                    "ledger_length": len(gw.engine.ledger),
+                    "worker_epoch": gw.engine.epoch_guard.worker_epoch,
+                })
+            else:
+                self._send_json(404, {"error": "Not found"})
+
+        def do_POST(self) -> None:
+            if self.path == "/v1/execute":
+                length = int(self.headers.get("Content-Length", "0"))
+                body_bytes = self.rfile.read(length) if length > 0 else b"{}"
+                try:
+                    req_data = json.loads(body_bytes.decode("utf-8"))
+                    prompt = str(req_data.get("prompt", ""))
+                    provider = str(req_data.get("provider", "groq"))
+                    result = gw.process_request(prompt=prompt, provider=provider)
+                    self._send_json(200, result)
+                except GatewayConfigError as exc:
+                    self._send_json(400, {"error": str(exc)})
+                except Exception as exc:
+                    self._send_json(500, {"error": str(exc)})
+            else:
+                self._send_json(404, {"error": "Not found"})
+
+    server = HTTPServer((host, port), GatewayHTTPHandler)
+    return server, gw
 
 
-def run_http_gateway(host: str = "127.0.0.1", port: int = 8000) -> None:
-    """Run the live local HTTP security gateway proxy on `http://localhost:8000`."""
-    gw = MultiProviderGateway()
-    server = HTTPServer((host, port), make_gateway_handler(gw))
-    print(f"=== The Shark Protocol HTTP Security Gateway v1.1.0 listening on http://{host}:{port} ===")
-    print("Endpoints: GET /v1/health | GET /v1/ledger/verify | POST /v1/execute")
+def run_http_gateway_server(host: str = "127.0.0.1", port: int = 8000) -> None:
+    server, _ = create_gateway_http_server(host=host, port=port)
+    print(f"The Shark Protocol (v1.1.2) HTTP Security Gateway listening on http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down gateway cleanly.")
-    finally:
         server.server_close()

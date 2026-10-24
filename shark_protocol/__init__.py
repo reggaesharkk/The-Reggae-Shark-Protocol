@@ -1,29 +1,42 @@
 """
-The Shark Protocol (v1.1.0 — Ironclad VRK, 4D Soft-Wall ODE, LRSC 11/99 & Typestate Gateway)
+The Reggae Shark Protocol (v1.1.2)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-License: MIT
+Canonical Zenodo DOI: 10.5281/zenodo.23620074 (Superseded v1.0.3 DOI: 10.5281/zenodo.23618033)
+License: MIT (Code & Lean 4 Proofs) / CC BY 4.0 (Specification Manuscript)
 """
 
 from .kernel import (
-    SharkProtocolEngine,
+    VRK_TRUST_ROOT_DIGEST,
     LifecycleState,
     LifecycleEvent,
-    RequestSlot,
     TypestateViolationError,
-    VRKSchemaError,
+    StaleWorkerEpochError,
+    BasinCollapseError,
+    RequestSlot,
+    WorkerEpochGuard,
     LRSCCompressor,
+    SharkProtocolEngine,
 )
-from .gateway import MultiProviderGateway, run_http_gateway
+from .gateway import (
+    GatewayConfigError,
+    MultiProviderGateway,
+    run_http_gateway_server,
+)
 
-__version__ = "1.1.0"
+__version__ = "1.1.2"
+__doi__ = "10.5281/zenodo.23620074"
 __all__ = [
-    "SharkProtocolEngine",
+    "VRK_TRUST_ROOT_DIGEST",
     "LifecycleState",
     "LifecycleEvent",
-    "RequestSlot",
     "TypestateViolationError",
-    "VRKSchemaError",
+    "StaleWorkerEpochError",
+    "BasinCollapseError",
+    "RequestSlot",
+    "WorkerEpochGuard",
     "LRSCCompressor",
+    "SharkProtocolEngine",
+    "GatewayConfigError",
     "MultiProviderGateway",
-    "run_http_gateway",
+    "run_http_gateway_server",
 ]

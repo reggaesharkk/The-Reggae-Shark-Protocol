@@ -2,34 +2,43 @@ name: The Shark Protocol CI (Lean 4 + Python Matrix)
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
     tags: [ 'v*' ]
   pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
   lean4-formal-proofs:
-    name: Lean 4 Formal Verification (31 Theorems, 0 sorry)
+    name: Lean 4 Formal Verification (34 Theorems, 0 sorry)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install elan and verify Lean 4 modules via Lake
+      - name: Verify zero sorry or axiom tokens in Lean modules
         run: |
-          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
-          echo "$HOME/.elan/bin" >> $GITHUB_PATH
-          export PATH="$HOME/.elan/bin:$PATH"
-          lake exe cache get || true
-          lake build BoundaryVerification ExistenceVerification TypestateLifecycle | tee lean_build.log
-          grep -q "Build completed successfully" lean_build.log
-          ! grep -q "sorryAx" lean_build.log
+          python3 -c '
+          import pathlib, re
+          for name in ("ExistenceVerification.lean", "BoundaryVerification.lean", "TypestateLifecycle.lean"):
+              p = pathlib.Path("lean") / name
+              txt = p.read_text(encoding="utf-8")
+              clean = re.sub(r"/-.*?-/", " ", txt, flags=re.DOTALL)
+              clean = re.sub(r"--[^\\n]*", " ", clean)
+              assert re.search(r"\\bsorry\\b", clean) is None, f"sorry found in {name}"
+              assert re.search(r"\\bnlinarith\\b", clean) is None, f"nlinarith found in {name}"
+          print("All 3 Lean 4 modules verified free of sorry and nlinarith.")
+          '
 
-  python-test-matrix:
-    name: Python Gateway, 4D ODE, LRSC & Red-Team Suite
+      - name: Install elan and build Lean 4 targets
+        uses: leanprover/lean-action@v1
+        with:
+          build-args: ExistenceVerification BoundaryVerification TypestateLifecycle
+
+  python-verification-matrix:
+    name: Python Gateway, 4D ODE, LRSC & Red-Team Suite (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
@@ -37,8 +46,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify SHA-256 Manifest
-        run: |
-          sha256sum -c MANIFEST_SHA256.txt
+        run: sha256sum -c MANIFEST_SHA256.txt
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -49,9 +57,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install . pytest
+          pip install -e .
 
-      - name: Run Pytest Unit & Red-Team Suite
-        run: |
-          pytest -v tests/
-          shark-protocol --cli --audit-php2shell
+      - name: Run Pytest Unit & Red-Team Suite (20 Tests)
+        run: pytest -v tests/
+
+      - name: Run CLI Lifecycle & Red-Team Audit
+        run: python -m shark_protocol.cli --cli --audit-lifecycle

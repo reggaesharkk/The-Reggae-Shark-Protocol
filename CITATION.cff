@@ -1,13 +1,20 @@
 cff-version: 1.2.0
-message: "If you use this software or its formal verification modules, please cite it as below."
+message: "If you use The Reggae Shark Protocol in your research, please cite it using the metadata below."
+title: "The Reggae Shark Protocol: Formal Verification, 4D Soft-Wall ODE Governance, LRSC Spectral Compression, and Merkle-DAG Provenance Kernel"
+version: "1.1.2"
+doi: "10.5281/zenodo.23620074"
+date-released: "2026-10-24"
+license: "MIT"
+repository-code: "https://github.com/reggaesharkk/The-Reggae-Shark-Protocol"
 authors:
   - family-names: "Upadhyay"
     given-names: "Prince"
     orcid: "https://orcid.org/0009-0002-1170-4487"
-title: "The Shark Protocol: Verifiable, Proof-Carrying AI Execution OS & Security Gateway"
-version: 1.1.0
-doi: 10.5281/zenodo.23620074
-date-released: 2026-10-24
-url: "https://github.com/reggaesharkk/The-Reggae-Shark-Protocol"
-license: MIT
-
+    email: "starxshark@gmail.com"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.23620074"
+    description: "Canonical v1.1.2 Zenodo Archive (v2)"
+  - type: doi
+    value: "10.5281/zenodo.23618033"
+    description: "Superseded v1.0.3 Zenodo Deposit (v1)"

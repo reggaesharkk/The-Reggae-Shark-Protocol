@@ -1,63 +1,67 @@
 """
-Streamlit Interactive Security & 4D Cognitive ODE Dashboard for The Shark Protocol (v1.1.0).
-Integrates the real 4D Soft-Wall ODE trajectory (`SharkProtocolEngine.simulate_trajectory`),
-live LRSC 11/99 spectral compression readouts, and VRK v0.3.1 hash-chain verification.
+Streamlit 4D ODE & VRK Telemetry Dashboard (`shark_protocol/dashboard.py`)
+Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
+Canonical DOI: 10.5281/zenodo.23620074
 """
 
-import streamlit as st
-import plotly.graph_objects as go
-from shark_protocol.gateway import MultiProviderGateway
+from __future__ import annotations
 
-st.set_page_config(page_title="The Shark Protocol Dashboard v1.1.0", layout="wide")
-st.title("🛡️ The Shark Protocol Security Gateway v1.1.0")
-st.markdown(
-    "**Verifiable, Proof-Carrying AI Execution OS** governed by **VRK v0.3.1 Hash-Chaining**, "
-    "**Typestate Epoch Isolation (`php2shell` Immunity)**, **4D Soft-Wall ODE Dynamics (`B_4`)**, "
-    "and **LRSC `11/99` Spectral Context Compression**."
-)
+from typing import Any, Dict
 
-if "gateway" not in st.session_state:
-    st.session_state.gateway = MultiProviderGateway()
+from .gateway import MultiProviderGateway
 
-gw: MultiProviderGateway = st.session_state.gateway
 
-col1, col2 = st.columns([1, 1])
+def generate_dashboard_telemetry(
+    prompt: str = "Autopoietic 4D soft-wall trajectory & LRSC 11/99 audit",
+    P_0: float = 4.0,
+    duration: float = 15.0,
+    dt: float = 0.05,
+) -> Dict[str, Any]:
+    """Compute real 4D ODE trajectory, Patankar interval enclosure, LRSC 11/99 witness, and VRK seal."""
+    gw = MultiProviderGateway()
+    gw.engine.P_0 = float(P_0)
+    traj = gw.engine.simulate_trajectory(duration=duration, dt=dt, P_0=P_0)
+    interval_step = gw.engine.step_ode_patankar_interval(dt=dt, P_0=P_0)
+    exec_res = gw.process_request(prompt=prompt, provider="groq")
+    ok, chain_status = gw.engine.verify_ledger_integrity()
+    return {
+        "trajectory": traj,
+        "patankar_interval": interval_step,
+        "execution": exec_res,
+        "vrk_chain_ok": ok,
+        "vrk_chain_status": chain_status,
+    }
 
-with col1:
-    st.subheader("🌐 Multi-Cloud LLM Provider & Typestate Gate")
-    provider = st.selectbox("Select Active Provider", ["Groq", "Together AI", "Google Gemini", "Hugging Face"])
-    prompt = st.text_area("Prompt Input", "Execute verified autonomous agent transaction under 4D soft-wall ODE bounds...")
-    sim_oom = st.checkbox("Simulate OOM Interrupt in PARTIAL_INIT (Test CVE-2026-109618 Defense)", value=False)
 
-    if st.button("Run Verified Prompt"):
-        try:
-            res = gw.process_request(provider, prompt, simulate_oom=sim_oom)
-            st.success(f"Status: {res['status']} | Mode: {res['dispatch_mode']} | Epoch: {res['worker_epoch']} ({res['typestate_final']})")
-            st.info(f"Layer 1 (VRK): {res['layer1_vrk']}")
-            st.markdown("**Layer 2 (4D Soft-Wall ODE State in $\mathcal{B}_4$):**")
-            st.json(res["layer2_governor"])
-            st.markdown("**Layer 3 (LRSC $M=99 \to K=11$ Spectral Compression):**")
-            st.json({
-                "footprint": res["layer3_lrsc"]["footprint_fraction"],
-                "relative_l2_error": res["layer3_lrsc"]["relative_l2_error"],
-                "spectral_digest": res["layer3_lrsc"]["spectral_digest"],
-            })
-            st.code(res["output"])
-        except Exception as exc:
-            st.error(f"FAIL-CLOSED REJECTION: {exc}")
+def run_streamlit_app() -> None:
+    import streamlit as st
+    import pandas as pd
 
-with col2:
-    st.subheader("📈 Real-Time 4D Soft-Wall ODE Trajectory (Eqs. B.1–B.4)")
-    traj = gw.engine.simulate_trajectory(total_time=80.0, sample_points=320)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=traj["t"], y=traj["gamma"], mode="lines", name="γ(t) Reconstruction [0, 10]"))
-    fig.add_trace(go.Scatter(x=traj["t"], y=[h / 10.0 for h in traj["H_obs"]], mode="lines", name="0.1 × H_obs(t) Entropy [scaled]"))
-    fig.add_trace(go.Scatter(x=traj["t"], y=traj["I_dot"], mode="lines", name="İ(t) Processing Rate"))
-    fig.add_trace(go.Scatter(x=traj["t"], y=[p * 10.0 for p in traj["Psi"]], mode="lines", name="10 × Ψ(t) Self-Modeling Readout"))
-    fig.update_layout(
-        height=420,
-        margin=dict(l=20, r=20, t=30, b=20),
-        xaxis_title="Time t (s)",
-        yaxis_title="Bounded State Magnitude inside B_4",
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    st.set_page_config(page_title="The Shark Protocol v1.1.2 Dashboard", layout="wide")
+    st.title("The Reggae Shark Protocol (v1.1.2) — 4D ODE, Patankar Interval & VRK Ledger")
+    st.caption("Canonical Zenodo DOI: 10.5281/zenodo.23620074 | Code: MIT | Specification: CC BY 4.0")
+
+    p0_val = st.sidebar.slider("Basal Sensory Drive (P_0)", 0.0, 6.0, 4.0, 0.1)
+    dur_val = st.sidebar.slider("Simulation Horizon (s)", 5.0, 40.0, 15.0, 1.0)
+    prompt_val = st.text_input("Gateway Prompt", "Verify 4D soft-wall ODE and LRSC 11/99 spectral witness")
+
+    telemetry = generate_dashboard_telemetry(prompt=prompt_val, P_0=p0_val, duration=dur_val)
+    df = pd.DataFrame({
+        "gamma": telemetry["trajectory"]["gamma"],
+        "H_obs": telemetry["trajectory"]["H_obs"],
+        "I_dot": telemetry["trajectory"]["I_dot"],
+        "Psi": telemetry["trajectory"]["Psi"],
+    }, index=telemetry["trajectory"]["t"])
+    st.subheader("Layer 2: 4D Soft-Wall ODE Trajectory in B_4")
+    st.line_chart(df)
+    st.subheader("Layer 1 & 3: VRK Seal & LRSC 11/99 Spectral Witness")
+    st.json({
+        "vrk_chain_status": telemetry["vrk_chain_status"],
+        "patankar_interval_width": telemetry["patankar_interval"]["max_interval_width"],
+        "lrsc": telemetry["execution"]["lrsc"],
+        "vrk_seal": telemetry["execution"]["vrk_seal"],
+    })
+
+
+if __name__ == "__main__":
+    run_streamlit_app()
