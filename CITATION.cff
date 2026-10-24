@@ -3,9 +3,7 @@ message: "If you use this software, please cite it as below."
 authors:
   - family-names: "Upadhyay"
     given-names: "Prince"
-    orcid: "https://orcid.org/0009-0002-1170-4487"
 title: "The Shark Protocol: Verifiable, Proof-Carrying AI Execution OS & Security Gateway"
-version: 1.0.1
+version: 1.0.2
 date-released: 2026-10-24
-repository-code: "https://github.com/reggaesharkk/The-Reggae-Shark-Protocol"
-license: MIT
+url: "https://github.com/reggaesharkk/The-Reggae-Shark-Protocol"

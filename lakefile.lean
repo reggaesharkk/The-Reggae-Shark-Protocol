@@ -1,8 +1,8 @@
 import Lake
 open Lake DSL
 
-package «SharkProtocol» where
-  -- Package configuration options
+package «shark_protocol» where
+  keywords := #["ai", "verification", "ode", "lean4"]
 
 lean_lib «ExistenceVerification» where
-  -- Library configuration options
+  srcDir := "lean"
