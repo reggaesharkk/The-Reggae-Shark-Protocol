@@ -2,14 +2,15 @@ from setuptools import setup, find_packages
 
 setup(
     name="shark_protocol",
-    version="1.0.2",
+    version="1.0.3",
     packages=find_packages(),
     install_requires=[
         "numpy",
         "scipy",
         "requests",
         "streamlit",
-        "plotly"
+        "plotly",
+        "fpdf2"
     ],
     entry_points={
         "console_scripts": [

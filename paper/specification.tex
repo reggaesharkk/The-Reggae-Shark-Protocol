@@ -1,0 +1,35 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+
+\geometry{margin=1in}
+
+\title{\textbf{The Shark Protocol: Technical Specification \& System Architecture}\\
+\large Verifiable, Proof-Carrying AI Execution OS \& Security Gateway}
+\author{\textbf{Prince Upadhyay}\\
+\small Independent Researcher, India}
+\date{October 24, 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+As autonomous AI agents acquire tool-calling capabilities and direct access to external APIs, ensuring deterministic runtime alignment becomes a critical imperative. This paper presents \textbf{The Shark Protocol}, a fail-closed, proof-carrying epistemic architecture and security proxy for multi-provider LLM workflows (Groq, Together AI, Google Gemini, and Hugging Face). The framework integrates (1)~a SHA-256 cryptographic claim verification shell (VRK v0.3.1); (2)~a 4D continuous-time ODE cognitive dynamics governor with 17 machine-checked Lean 4 theorems; (3)~Low-Rank Spectral Context Memory (LRSC) achieving 88.9\% context compression ($1/9\text{th}$ scale); and (4)~a Multi-Cloud Security Gateway providing zero-downtime proxy failover.
+\end{abstract}
+
+\section{System Architecture \& Multi-Cloud Gateway}
+The security gateway acts as a local HTTP proxy running at \texttt{http://localhost:8000}. It dynamically routes and inspects prompt payloads across four integrated LLM providers:
+\begin{enumerate}
+    \item \textbf{Groq API}: \texttt{llama-3.3-70b-versatile} (\texttt{GROQ\_API\_KEY})
+    \item \textbf{Together AI}: \texttt{meta-llama/Llama-3.3-70B-Instruct-Turbo} (\texttt{TOGETHER\_API\_KEY})
+    \item \textbf{Google Gemini}: \texttt{gemini-1.5-flash} (\texttt{GEMINI\_API\_KEY})
+    \item \textbf{Hugging Face API}: \texttt{mistralai/Mistral-7B-Instruct-v0.2} (\texttt{HUGGINGFACE\_API\_KEY})
+\end{enumerate}
+
+\section{Conclusion}
+The Shark Protocol establishes a mathematically grounded, proof-carrying software architecture for safe autonomous AI deployment.
+\end{document}
