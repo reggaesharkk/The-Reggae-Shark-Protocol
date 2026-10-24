@@ -1,4 +1,4 @@
-[![DOI]([suspicious link removed])](https://doi.org/10.5281/zenodo.23618033)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23618033.svg)](https://doi.org/10.5281/zenodo.23618033)
 
 # The Shark Protocol
 
@@ -66,4 +66,5 @@ streamlit run shark_protocol/dashboard.py
 ## Citation & License
 
 Licensed under the **MIT License**.
+
 
