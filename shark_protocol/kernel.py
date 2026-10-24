@@ -12,7 +12,7 @@ class SharkProtocolEngine:
     def _init_ledger(self):
         genesis = {
             "protocol": "The Shark Protocol",
-            "version": "v1.0.0",
+            "version": "v1.0.1",
             "axiom": "Build. Attack. Falsify. Preserve.",
             "status": "INITIALIZED"
         }
@@ -76,37 +76,17 @@ class SharkProtocolEngine:
     def lrsc_compress(self, vector_data, K_target=11, M=99):
         data_M = np.resize(vector_data, M)
         dft_coeffs = np.fft.fft(data_M)
-        
         magnitudes = np.abs(dft_coeffs)
         top_k_indices = np.argsort(magnitudes)[-K_target:]
         
-        compressed_representation = dft_coeffs[top_k_indices]
         reconstructed_dft = np.zeros(M, dtype=complex)
-        reconstructed_dft[top_k_indices] = compressed_representation
+        reconstructed_dft[top_k_indices] = dft_coeffs[top_k_indices]
         reconstructed_signal = np.real(np.fft.ifft(reconstructed_dft))
         
-        rel_error = np.linalg.norm(data_M - reconstructed_signal) / (np.linalg.norm(data_M) + 1e-12)
+        rel_error = np.linalg.norm(data_M - reconstructed_signal) / np.linalg.norm(data_M)
         
         return {
             "compression_ratio": f"{K_target}/{M} (1/9th)",
             "indices": top_k_indices.tolist(),
             "relative_l2_error": float(rel_error)
         }
-
-    def audit_bptt_gradient(self, f_func, w, eps=1e-5):
-        grad_num = np.zeros_like(w)
-        for i in range(len(w)):
-            w_plus1, w_minus1 = w.copy(), w.copy()
-            w_plus2, w_minus2 = w.copy(), w.copy()
-            
-            w_plus1[i] += eps
-            w_minus1[i] -= eps
-            w_plus2[i] += 2 * eps
-            w_minus2[i] -= 2 * eps
-            
-            f_p1, f_m1 = f_func(w_plus1), f_func(w_minus1)
-            f_p2, f_m2 = f_func(w_plus2), f_func(w_minus2)
-            
-            grad_num[i] = (-f_p2 + 8*f_p1 - 8*f_m1 + f_m2) / (12 * eps)
-            
-        return grad_num
