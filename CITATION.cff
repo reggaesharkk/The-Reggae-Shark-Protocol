@@ -1,4 +1,4 @@
-cff-version: 1.2.0
+﻿cff-version: 1.2.0
 message: "If you use this software or its formal verification modules, please cite it as below."
 authors:
   - family-names: "Upadhyay"
@@ -6,7 +6,8 @@ authors:
     orcid: "https://orcid.org/0009-0002-1170-4487"
 title: "The Shark Protocol: Verifiable, Proof-Carrying AI Execution OS & Security Gateway"
 version: 1.1.0
-doi: 10.5281/zenodo.23618033
+doi: 10.5281/zenodo.23620074
 date-released: 2026-10-24
 url: "https://github.com/reggaesharkk/The-Reggae-Shark-Protocol"
 license: MIT
+
