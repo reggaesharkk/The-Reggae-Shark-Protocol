@@ -1,3 +1,5 @@
+[![DOI]([suspicious link removed])](https://doi.org/10.5281/zenodo.23618033)
+
 # The Shark Protocol
 
 **Verifiable, Proof-Carrying AI Execution OS & Security Gateway** governed by **4D ODE Dynamics**, **Lean 4 Formal Theorems**, and **Low-Rank Spectral Context Compression**.
@@ -64,3 +66,4 @@ streamlit run shark_protocol/dashboard.py
 ## Citation & License
 
 Licensed under the **MIT License**.
+
