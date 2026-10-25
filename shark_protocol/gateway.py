@@ -1,7 +1,7 @@
 """
 Layer 4: Fail-Closed Multi-Cloud Execution Gateway & Hardened Loopback HTTP Proxy (`shark_protocol/gateway.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.2.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v3 DOI: 10.5281/zenodo.23624605)
+Version: 1.2.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v4 DOI: 10.5281/zenodo.23635351 | v3 DOI: 10.5281/zenodo.23624605)
 
 Audit Item 4 Hardening Summary:
 1. Strict Fail-Closed Provider Dispatch:
@@ -389,7 +389,7 @@ def create_gateway_http_server(
                     "status": "healthy" if ok else "degraded",
                     "version": "1.2.0",
                     "concept_doi": "10.5281/zenodo.23618032",
-                    "doi": "10.5281/zenodo.23624605",
+                    "doi": "10.5281/zenodo.23635351",
                     "vrk_chain_status": detail,
                     "ledger_length": len(gw.engine.ledger),
                     "worker_epoch": gw.engine.epoch_guard.worker_epoch,

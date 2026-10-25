@@ -178,7 +178,7 @@ class TestSharkProtocolSuite(unittest.TestCase):
                 health = json.loads(resp.read().decode("utf-8"))
                 self.assertEqual(health["status"], "healthy")
                 self.assertEqual(health["version"], "1.2.0")
-                self.assertEqual(health["doi"], "10.5281/zenodo.23624605")
+                self.assertEqual(health["doi"], "10.5281/zenodo.23635351")
 
             req = urllib_request.Request(
                 f"http://127.0.0.1:{port}/v1/execute",

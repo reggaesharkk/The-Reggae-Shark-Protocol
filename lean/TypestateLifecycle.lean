@@ -7,7 +7,7 @@ import Mathlib.Data.Real.Basic
 # Sequence Monotonicity, and Merkle-DAG Join-Semilattice (`TypestateLifecycle.lean`)
 
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.2.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v3 DOI: 10.5281/zenodo.23624605)
+Version: 1.2.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v4 DOI: 10.5281/zenodo.23635351 | v3 DOI: 10.5281/zenodo.23624605)
 License: MIT License
 
 ## Scope & Claim Boundary (`does_not_imply`)

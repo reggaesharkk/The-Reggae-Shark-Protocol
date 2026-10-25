@@ -1,7 +1,7 @@
 """
 Layer 1, Layer 1B, Layer 2, and Layer 3 Core Verification Kernel (`shark_protocol/kernel.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.2.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v3 DOI: 10.5281/zenodo.23624605)
+Version: 1.2.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v4 DOI: 10.5281/zenodo.23635351 | v3 DOI: 10.5281/zenodo.23624605)
 
 What Is and Is Not Modelled (Epistemic Firewall):
 - Layer 1 (`SharkProtocolEngine` + `Ed25519AuthoritySigner`): Enforces the `intentseal-vrk-claim-v2`

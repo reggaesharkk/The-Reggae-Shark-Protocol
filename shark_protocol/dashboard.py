@@ -39,7 +39,7 @@ def render_streamlit_dashboard() -> None:
 
     st.set_page_config(page_title="The Shark Protocol v1.2.0 Telemetry", layout="wide")
     st.title("The Reggae Shark Protocol (v1.2.0 — Red-Team Tested Edition)")
-    st.caption("Concept DOI: 10.5281/zenodo.23618032 · Lineage DOIs: 10.5281/zenodo.23624605 (v3) · 10.5281/zenodo.23620074 (v2) · 10.5281/zenodo.23618033 (v1.0.3) | Code: MIT | Specification: CC BY 4.0")
+    st.caption("Concept DOI: 10.5281/zenodo.23618032 · Lineage DOIs: 10.5281/zenodo.23635351 (v4), 10.5281/zenodo.23624605 (v3) · 10.5281/zenodo.23620074 (v2) · 10.5281/zenodo.23618033 (v1.0.3) | Code: MIT | Specification: CC BY 4.0")
 
     p0_val = st.slider("Basal Sensory Drive (P_0)", min_value=0.0, max_value=6.0, value=4.0, step=0.1)
     prompt_val = st.text_input("Gateway Prompt", value="Verify 4D Soft-Wall ODE & LRSC 11/99 Spectral Witness")

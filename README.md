@@ -1,14 +1,14 @@
 # The Reggae Shark Protocol (v1.2.0 -- Red-Team Tested Edition)
 
 [![Concept DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23618032.svg)](https://doi.org/10.5281/zenodo.23618032)
-[![Version DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23624605.svg)](https://doi.org/10.5281/zenodo.23624605)
+[![Version DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23635351.svg)](https://doi.org/10.5281/zenodo.23635351)
 [![License: MIT](https://img.shields.io/badge/Code_&_Lean_4-MIT-blue.svg)](LICENSE)
 [![License: CC BY 4.0](https://img.shields.io/badge/Specification_PDF-CC_BY_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
 [![Lean 4](https://img.shields.io/badge/Lean_4-38_Theorems_(0_sorry)-brightgreen.svg)](lean/)
 [![Tests](https://img.shields.io/badge/Pytest-30%2F30_Passing-brightgreen.svg)](tests/test_core.py)
 
 **Author:** Prince Upadhyay ([ORCID: 0009-0002-1170-4487](https://orcid.org/0009-0002-1170-4487) | `starxshark@gmail.com`)  
-**Release Version:** `v1.2.0` (Red-Team Tested Edition | Concept DOI: [10.5281/zenodo.23618032](https://doi.org/10.5281/zenodo.23618032) | Lineage DOIs: `v3` [10.5281/zenodo.23624605](https://doi.org/10.5281/zenodo.23624605), `v2` [10.5281/zenodo.23620074](https://doi.org/10.5281/zenodo.23620074), and `v1.0.3` [10.5281/zenodo.23618033](https://doi.org/10.5281/zenodo.23618033))  
+**Release Version:** `v1.2.0` (Red-Team Tested Edition | Concept DOI: [10.5281/zenodo.23618032](https://doi.org/10.5281/zenodo.23618032) | Lineage DOIs: `v4` [10.5281/zenodo.23635351](https://doi.org/10.5281/zenodo.23635351), `v3` [10.5281/zenodo.23624605](https://doi.org/10.5281/zenodo.23624605), `v2` [10.5281/zenodo.23620074](https://doi.org/10.5281/zenodo.23620074), and `v1.0.3` [10.5281/zenodo.23618033](https://doi.org/10.5281/zenodo.23618033))  
 **Licensing:** **MIT License** ([`LICENSE`](LICENSE)) for all Python source code and Lean 4 formal proofs; **CC BY 4.0** for the technical specification manuscript (`paper/specification.tex` and `paper/specification.pdf`).  
 **Epistemic Standard:** `Build. Attack. Falsify. Preserve.`
 
