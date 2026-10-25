@@ -52,10 +52,9 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Install elan and build 41 zero-sorry Lean 4 theorems
-        uses: leanprover/lean-action@d63700baa6fc2d53eb3aaf3b4dc1ef9a0a4e8f02
+        uses: leanprover/lean-action@f807b338d95de7813c5c50d018f1c23c9b93b4ec # v1.2.0
         with:
-          auto-config: false
-          build: true
+          build-args: ExistenceVerification BoundaryVerification TypestateLifecycle AxiomsCheck
 
       - name: Capture lake env lean lean/AxiomsCheck.lean and verify axiom subset
         run: |

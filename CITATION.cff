@@ -1,31 +1,14 @@
 cff-version: 1.2.0
 message: "If you use The Reggae Shark Protocol in your research, please cite it using the metadata below."
-type: software
-title: "The Reggae Shark Protocol: Formal Verification, Multi-Principal Ed25519 Ledger & 4D Soft-Wall Gateway (v1.3.1)"
+title: "The Reggae Shark Protocol: 41 Lean 4 Theorems, Pinned-Key Ed25519 Ledger Verification, 200-Bit Interval Patankar Bridge & Bandlimited LRSC"
 version: "1.3.1"
-date-released: "2026-10-25"
 doi: "10.5281/zenodo.23618032"
+date-released: "2026-10-25"
+url: "https://github.com/reggaesharkk/The-Reggae-Shark-Protocol"
 repository-code: "https://github.com/reggaesharkk/The-Reggae-Shark-Protocol"
-url: "https://doi.org/10.5281/zenodo.23618032"
 license: "MIT"
 authors:
   - family-names: "Upadhyay"
     given-names: "Prince"
-    email: "starxshark@gmail.com"
     orcid: "https://orcid.org/0009-0002-1170-4487"
-identifiers:
-  - type: doi
-    value: "10.5281/zenodo.23618032"
-    description: "Zenodo Concept DOI (resolves to the latest version)"
-  - type: doi
-    value: "10.5281/zenodo.23635351"
-    description: "Zenodo v4 Deposit (v1.2.0)"
-  - type: doi
-    value: "10.5281/zenodo.23624605"
-    description: "Zenodo v3 Deposit (v1.1.2)"
-  - type: doi
-    value: "10.5281/zenodo.23620074"
-    description: "Zenodo v2 Deposit (v1.1.0)"
-  - type: doi
-    value: "10.5281/zenodo.23618033"
-    description: "Zenodo v1 Deposit (v1.0.3)"
+    email: "starxshark@gmail.com"

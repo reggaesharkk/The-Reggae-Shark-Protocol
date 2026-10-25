@@ -1554,12 +1554,11 @@ class SharkProtocolEngine:
     def verify_chain_list(
         cls,
         chain: Sequence[Dict[str, Any]],
-        *,
-        expected_pubkey: Any,
         known_parent_digests: Optional[Iterable[str]] = None,
         check_disk_evidence: bool = True,
+        *,
         signed_head: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[bool, str]:
+        expected_pubkey: str) -> Tuple[bool, str]:
         """
         Verify a ledger sequence against VRK v0.3.1 hash-chain, multi-parent membership,
         prompt/response commitment, on-disk evidence anchor, and Ed25519 signature rules.

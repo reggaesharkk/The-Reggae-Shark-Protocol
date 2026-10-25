@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-CI & Local Axiom Gate Verifier (`tools/check_lean_axioms.py`)
-Parses the output of `lake env lean lean/AxiomsCheck.lean` and verifies:
-1. All 41 declared theorems across `lean/BoundaryVerification.lean` (9),
-   `lean/ExistenceVerification.lean` (17), and `lean/TypestateLifecycle.lean` (15)
-   are present in `lean/AxiomsCheck.lean` and in the captured Lean output.
-2. Every printed axiom list is a subset of `{"propext", "Classical.choice", "Quot.sound"}`.
-3. `sorryAx` or any custom axiom is strictly absent.
+CI & Local Gate: Verify all 41 Lean 4 theorems across BoundaryVerification.lean (9),
+ExistenceVerification.lean (17), and TypestateLifecycle.lean (15).
+
+Checks:
+1. Comment-stripped source of all 3 Lean modules contains zero `sorry`, `sorryAx`, `axiom`, or `nlinarith`,
+   and declares all 41 expected theorem names.
+2. `lean/AxiomsCheck.lean` contains `#print axioms <thm>` for all 41 theorems.
+3. When given the stdout file from `lake env lean lean/AxiomsCheck.lean`, verifies that all 41
+   theorems appear in the output and that every theorem's axioms are a subset of
+   `{"propext", "Classical.choice", "Quot.sound"}` (or `does not depend on any axioms`) with zero `sorryAx`.
 """
 from __future__ import annotations
 
@@ -18,110 +21,102 @@ from typing import Dict, List, Set
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ALLOWED_AXIOMS: Set[str] = {"propext", "Classical.choice", "Quot.sound"}
 
-EXPECTED_MODULE_COUNTS: Dict[str, int] = {
-    "lean/BoundaryVerification.lean": 9,
-    "lean/ExistenceVerification.lean": 17,
-    "lean/TypestateLifecycle.lean": 15,
-}
+LEAN_MODULES = (
+    "lean/BoundaryVerification.lean",
+    "lean/ExistenceVerification.lean",
+    "lean/TypestateLifecycle.lean",
+)
 
 
 def strip_lean_comments(text: str) -> str:
-    no_block = re.sub(r"/-.*?-/", " ", text, flags=re.DOTALL)
-    return re.sub(r"--[^\n]*", " ", no_block)
+    text = re.sub(r"/-.*?-/", " ", text, flags=re.DOTALL)
+    text = re.sub(r"--[^\n]*", " ", text)
+    return text
 
 
 def discover_declared_theorems(repo_root: Path = REPO_ROOT) -> Dict[str, List[str]]:
     out: Dict[str, List[str]] = {}
-    for rel_path, expected_count in EXPECTED_MODULE_COUNTS.items():
-        full_path = repo_root / rel_path
-        if not full_path.exists():
-            raise FileNotFoundError(f"Missing Lean module: {full_path}")
-        clean = strip_lean_comments(full_path.read_text(encoding="utf-8"))
-        thms = re.findall(r"\b(?:theorem|lemma)\s+([A-Za-z0-9_]+)", clean)
-        if len(thms) != expected_count:
-            raise AssertionError(
-                f"{rel_path} expected {expected_count} theorems, found {len(thms)}: {thms}"
-            )
-        out[rel_path] = thms
+    for rel in LEAN_MODULES:
+        p = repo_root / rel
+        if not p.exists():
+            raise AssertionError(f"Missing Lean module: {rel}")
+        clean = strip_lean_comments(p.read_text(encoding="utf-8"))
+        for forbidden in ("sorry", "sorryAx", "axiom", "nlinarith"):
+            if re.search(rf"\b{forbidden}\b", clean):
+                raise AssertionError(f"Forbidden token '{forbidden}' found in {rel}")
+        thms = re.findall(r"\btheorem\s+([A-Za-z0-9_']+)", clean)
+        out[rel] = thms
     return out
 
 
 def verify_axioms_check_source(repo_root: Path = REPO_ROOT) -> List[str]:
-    declared_map = discover_declared_theorems(repo_root)
-    ax_file = repo_root / "lean/AxiomsCheck.lean"
-    if not ax_file.exists():
-        raise FileNotFoundError(f"Missing {ax_file}")
-    clean = strip_lean_comments(ax_file.read_text(encoding="utf-8"))
-    printed = re.findall(r"#print\s+axioms\s+([A-Za-z0-9_.]+)", clean)
-    short_printed = [p.split(".")[-1] for p in printed]
-    expected_all = [
-        t for rel in ("lean/BoundaryVerification.lean", "lean/ExistenceVerification.lean", "lean/TypestateLifecycle.lean")
-        for t in declared_map[rel]
-    ]
-    if len(short_printed) != 41 or set(short_printed) != set(expected_all):
+    decl_map = discover_declared_theorems(repo_root)
+    expected_counts = {
+        "lean/BoundaryVerification.lean": 9,
+        "lean/ExistenceVerification.lean": 17,
+        "lean/TypestateLifecycle.lean": 15,
+    }
+    all_theorems: List[str] = []
+    for rel, count in expected_counts.items():
+        found = decl_map[rel]
+        if len(found) != count:
+            raise AssertionError(f"{rel}: expected {count} theorems, found {len(found)}")
+        all_theorems.extend(found)
+
+    ax_path = repo_root / "lean" / "AxiomsCheck.lean"
+    if not ax_path.exists():
+        raise AssertionError("Missing lean/AxiomsCheck.lean")
+    ax_clean = strip_lean_comments(ax_path.read_text(encoding="utf-8"))
+    printed = [m.split(".")[-1] for m in re.findall(r"#print\s+axioms\s+([A-Za-z0-9_.']+)", ax_clean)]
+    if sorted(printed) != sorted(all_theorems) or len(printed) != 41:
         raise AssertionError(
-            f"lean/AxiomsCheck.lean #print axioms mismatch: count={len(short_printed)}, "
-            f"missing={set(expected_all) - set(short_printed)}"
+            f"lean/AxiomsCheck.lean #print axioms mismatch: expected 41 theorems, got {len(printed)}"
         )
-    return expected_all
+    return all_theorems
 
 
-def verify_lean_axioms_output(raw_output: str, repo_root: Path = REPO_ROOT) -> Dict[str, Set[str]]:
-    expected_all = verify_axioms_check_source(repo_root)
-    if "sorryAx" in raw_output:
-        raise AssertionError("Forbidden 'sorryAx' detected in Lean axiom output!")
-
-    depends_re = re.compile(r"^'([^']+)'\s+depends on axioms:\s*\[([^\]]*)\]\s*$")
-    no_axioms_re = re.compile(r"^'([^']+)'\s+does not depend on any axioms\s*$")
+def verify_lean_axioms_output(stdout_text: str, repo_root: Path = REPO_ROOT) -> Dict[str, Set[str]]:
+    expected = verify_axioms_check_source(repo_root)
+    if "sorryAx" in stdout_text:
+        raise AssertionError("CRITICAL: sorryAx detected in Lean #print axioms output!")
+    dep_pattern = re.compile(r"^'([^']+)'\s+depends on axioms:\s*\[(.*)\]\s*$", re.MULTILINE)
+    no_ax_pattern = re.compile(r"^'([^']+)'\s+does not depend on any axioms\s*$", re.MULTILINE)
 
     parsed: Dict[str, Set[str]] = {}
-    for raw_line in raw_output.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        m_dep = depends_re.match(line)
-        if m_dep:
-            thm_full, ax_list_str = m_dep.group(1), m_dep.group(2)
-            thm_short = thm_full.split(".")[-1]
-            axioms = {a.strip() for a in ax_list_str.split(",") if a.strip()}
-            disallowed = axioms - ALLOWED_AXIOMS
-            if disallowed:
-                raise AssertionError(
-                    f"Theorem '{thm_full}' uses disallowed axioms: {sorted(disallowed)}"
-                )
-            parsed[thm_short] = axioms
-            continue
-        m_none = no_axioms_re.match(line)
-        if m_none:
-            thm_full = m_none.group(1)
-            thm_short = thm_full.split(".")[-1]
-            parsed[thm_short] = set()
+    for match in dep_pattern.finditer(stdout_text):
+        thm_name = match.group(1).strip().split(".")[-1]
+        raw_axioms = match.group(2).strip()
+        axioms = {a.strip() for a in raw_axioms.split(",") if a.strip()} if raw_axioms else set()
+        if "sorryAx" in axioms:
+            raise AssertionError(f"Theorem '{thm_name}' depends on sorryAx")
+        disallowed = axioms - ALLOWED_AXIOMS
+        if disallowed:
+            raise AssertionError(f"Theorem '{thm_name}' uses disallowed axioms: {sorted(disallowed)}")
+        parsed[thm_name] = axioms
 
-    missing = set(expected_all) - set(parsed.keys())
-    if missing or len(parsed) != len(expected_all):
-        raise AssertionError(
-            f"Axiom output count mismatch: verified {len(parsed)}/{len(expected_all)} theorems; "
-            f"missing={sorted(missing)}"
-        )
+    for match in no_ax_pattern.finditer(stdout_text):
+        thm_name = match.group(1).strip().split(".")[-1]
+        parsed[thm_name] = set()
+
+    missing = set(expected) - set(parsed.keys())
+    if missing:
+        raise AssertionError(f"Missing #print axioms output for {len(missing)} theorems: {sorted(missing)}")
+    if len(parsed) != 41:
+        raise AssertionError(f"Expected 41 theorem axiom records, got {len(parsed)}")
     return parsed
 
 
-def main() -> int:
-    verify_axioms_check_source(REPO_ROOT)
-    if len(sys.argv) > 1 and sys.argv[1] == "--source-only":
-        print("AXIOMS_SOURCE_CHECK_OK: 41/41 theorems registered in lean/AxiomsCheck.lean")
-        return 0
-    if len(sys.argv) > 1 and sys.argv[1] != "-":
-        raw = Path(sys.argv[1]).read_text(encoding="utf-8")
+def main(argv: List[str]) -> int:
+    expected = verify_axioms_check_source(REPO_ROOT)
+    if len(argv) >= 2 and argv[1] != "--source-only":
+        out_path = Path(argv[1])
+        stdout_text = out_path.read_text(encoding="utf-8")
+        verify_lean_axioms_output(stdout_text, REPO_ROOT)
+        print(f"OK: verified all {len(expected)} theorems and their Lean #print axioms outputs.")
     else:
-        raw = sys.stdin.read()
-    parsed = verify_lean_axioms_output(raw, REPO_ROOT)
-    print(
-        f"AXIOMS_OUTPUT_VERIFIED: {len(parsed)}/41 theorems checked; "
-        f"all axioms subset of {sorted(ALLOWED_AXIOMS)} with 0 sorryAx."
-    )
+        print(f"OK: verified {len(expected)} theorems in lean/AxiomsCheck.lean (source-only mode).")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv))

@@ -2,6 +2,8 @@ import BoundaryVerification
 import ExistenceVerification
 import TypestateLifecycle
 
+open SharkProtocol
+
 /-!
 # Unified 41-Theorem Axiom Audit (`lean/AxiomsCheck.lean`)
 Prints the exact axiom dependencies for all 41 theorems across:
