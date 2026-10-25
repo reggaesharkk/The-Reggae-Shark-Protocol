@@ -1,7 +1,7 @@
 """
 Streamlit 4D ODE & VRK Telemetry Dashboard (`shark_protocol/dashboard.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Canonical DOI: 10.5281/zenodo.23620074
+Canonical DOI: 10.5281/zenodo.23624605
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def run_streamlit_app() -> None:
 
     st.set_page_config(page_title="The Shark Protocol v1.1.2 Dashboard", layout="wide")
     st.title("The Reggae Shark Protocol (v1.1.2) — 4D ODE, Patankar Interval & VRK Ledger")
-    st.caption("Canonical Zenodo DOI: 10.5281/zenodo.23620074 | Code: MIT | Specification: CC BY 4.0")
+    st.caption("Canonical Zenodo DOI: 10.5281/zenodo.23624605 | Code: MIT | Specification: CC BY 4.0")
 
     p0_val = st.sidebar.slider("Basal Sensory Drive (P_0)", 0.0, 6.0, 4.0, 0.1)
     dur_val = st.sidebar.slider("Simulation Horizon (s)", 5.0, 40.0, 15.0, 1.0)

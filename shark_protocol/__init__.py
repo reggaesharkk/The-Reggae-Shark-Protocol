@@ -1,7 +1,7 @@
 """
 The Reggae Shark Protocol (v1.1.2)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Canonical Zenodo DOI: 10.5281/zenodo.23620074 (Superseded v1.0.3 DOI: 10.5281/zenodo.23618033)
+Canonical Zenodo DOI: 10.5281/zenodo.23624605 (Superseded v1.0.3 DOI: 10.5281/zenodo.23618033)
 License: MIT (Code & Lean 4 Proofs) / CC BY 4.0 (Specification Manuscript)
 """
 
@@ -24,7 +24,7 @@ from .gateway import (
 )
 
 __version__ = "1.1.2"
-__doi__ = "10.5281/zenodo.23620074"
+__doi__ = "10.5281/zenodo.23624605"
 __all__ = [
     "VRK_TRUST_ROOT_DIGEST",
     "LifecycleState",

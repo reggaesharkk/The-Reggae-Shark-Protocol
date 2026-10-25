@@ -6,7 +6,7 @@ import Mathlib.Data.Real.Basic
 # Capacitive Decay Floor, and Merkle-DAG Join Commutativity (`TypestateLifecycle.lean`)
 
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.1.2 (Canonical DOI: 10.5281/zenodo.23620074)
+Version: 1.1.2 (Canonical DOI: 10.5281/zenodo.23624605)
 License: MIT License
 
 ## Scope & Claim Boundary (`does_not_imply`)

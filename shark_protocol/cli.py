@@ -1,7 +1,7 @@
 """
 Command-Line Interface for The Reggae Shark Protocol (`shark_protocol/cli.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Canonical DOI: 10.5281/zenodo.23620074
+Canonical DOI: 10.5281/zenodo.23624605
 """
 
 from __future__ import annotations

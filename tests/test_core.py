@@ -1,7 +1,7 @@
 """
 Unit, Integration, and Senior Red-Team Stress Suite (`tests/test_core.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Canonical DOI: 10.5281/zenodo.23620074
+Canonical DOI: 10.5281/zenodo.23624605
 
 Covers:
   - Layer 1: VRK v0.3.1 SHA-256 hash-chain & tamper rejection (`test_01`, `test_02`, `test_05`)
@@ -172,7 +172,7 @@ class TestSharkProtocolSuite(unittest.TestCase):
             with urllib_request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as resp:
                 health = json.loads(resp.read().decode("utf-8"))
                 self.assertEqual(health["status"], "healthy")
-                self.assertEqual(health["doi"], "10.5281/zenodo.23620074")
+                self.assertEqual(health["doi"], "10.5281/zenodo.23624605")
 
             req = urllib_request.Request(
                 f"http://127.0.0.1:{port}/v1/execute",

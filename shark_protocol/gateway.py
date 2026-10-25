@@ -1,7 +1,7 @@
 """
 Layer 4: Fail-Closed Multi-Cloud Execution Gateway & Local Loopback HTTP Proxy (`shark_protocol/gateway.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Canonical DOI: 10.5281/zenodo.23620074
+Canonical DOI: 10.5281/zenodo.23624605
 
 What Is and Is Not Verified in CI:
 - The deterministic local verification pipeline (`VRK_OFFLINE_SEALED_SIMULATION`) and local
@@ -218,7 +218,7 @@ def create_gateway_http_server(
                 self._send_json(200, {
                     "status": "healthy" if ok else "degraded",
                     "version": "1.1.2",
-                    "doi": "10.5281/zenodo.23620074",
+                    "doi": "10.5281/zenodo.23624605",
                     "vrk_chain_status": detail,
                     "ledger_length": len(gw.engine.ledger),
                     "worker_epoch": gw.engine.epoch_guard.worker_epoch,

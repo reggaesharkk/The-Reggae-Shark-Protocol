@@ -1,7 +1,7 @@
 """
 Layer 1, Layer 1B, Layer 2, and Layer 3 Core Verification Kernel (`shark_protocol/kernel.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Canonical DOI: 10.5281/zenodo.23620074
+Canonical DOI: 10.5281/zenodo.23624605
 
 What Is and Is Not Modelled (Epistemic Firewall):
 - Layer 1 (`SharkProtocolEngine`): Enforces the `intentseal-vrk-claim-v2` schema anchored at the
