@@ -1,7 +1,7 @@
 """
 Layer 4: Fail-Closed Multi-Cloud Execution Gateway & Hardened Loopback HTTP Proxy (`shark_protocol/gateway.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.2.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v4 DOI: 10.5281/zenodo.23635351 | v3 DOI: 10.5281/zenodo.23624605)
+Version: 1.3.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v4 DOI: 10.5281/zenodo.23635351 | v3 DOI: 10.5281/zenodo.23624605)
 
 Audit Item 4 Hardening Summary:
 1. Strict Fail-Closed Provider Dispatch:
@@ -387,7 +387,7 @@ def create_gateway_http_server(
                 ok, detail = gw.engine.verify_ledger_integrity()
                 self._send_json(200, {
                     "status": "healthy" if ok else "degraded",
-                    "version": "1.2.0",
+                    "version": "1.3.0",
                     "concept_doi": "10.5281/zenodo.23618032",
                     "doi": "10.5281/zenodo.23635351",
                     "vrk_chain_status": detail,
@@ -451,7 +451,7 @@ def run_http_gateway_server(
     server, _ = create_gateway_http_server(
         host=host, port=port, allow_remote=allow_remote, auth_token=auth_token
     )
-    print(f"The Shark Protocol (v1.2.0) HTTP Security Gateway listening on http://{host}:{port}")
+    print(f"The Shark Protocol (v1.3.0) HTTP Security Gateway listening on http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

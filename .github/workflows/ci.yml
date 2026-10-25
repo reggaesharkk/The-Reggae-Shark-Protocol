@@ -9,7 +9,7 @@ on:
 
 jobs:
   lean4-formal-proofs:
-    name: Lean 4 Formal Verification (38 Theorems, 0 sorry, 0 custom axiom)
+    name: Lean 4 Formal Verification (41 Theorems, 0 sorry, 0 custom axiom)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -31,7 +31,7 @@ jobs:
               if name == "TypestateLifecycle.lean":
                   for t in thms:
                       assert f"#print axioms {t}" in clean, f"Missing #print axioms for {t}"
-          print("All 3 Lean 4 modules (38 theorems) verified free of sorry, custom axiom, and nlinarith.")
+          print("All 3 Lean 4 modules (41 theorems) verified free of sorry, custom axiom, and nlinarith.")
           '
 
       - name: Install elan and build Lean 4 targets
@@ -64,7 +64,7 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
 
-      - name: Run Pytest Unit & Red-Team Suite (30 Tests)
+      - name: Run Pytest Unit & Red-Team Suite (34 Tests)
         run: pytest -v tests/
 
       - name: Run CLI Lifecycle & Red-Team Audit

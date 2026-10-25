@@ -1,7 +1,7 @@
 """
 Command-Line Interface for The Reggae Shark Protocol (`shark_protocol/cli.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.2.0 (Red-Team Tested Edition)
+Version: 1.3.0 (Red-Team Tested Edition)
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from .gateway import MultiProviderGateway, run_http_gateway_server
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="shark-protocol",
-        description="The Reggae Shark Protocol (v1.2.0) — Verifiable AI Execution Kernel & Multi-Cloud Gateway",
+        description="The Reggae Shark Protocol (v1.3.0) — Verifiable AI Execution Kernel & Multi-Cloud Gateway",
     )
     parser.add_argument("--cli", action="store_true", help="Run interactive or single-shot CLI verification pipeline")
     parser.add_argument("--prompt", type=str, default="Verify 4D soft-wall ODE & LRSC 11/99 state", help="Prompt text to process")

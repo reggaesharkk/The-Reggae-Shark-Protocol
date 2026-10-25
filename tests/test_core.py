@@ -1,7 +1,7 @@
 """
 Unit, Integration, and Red-Team Stress Suite (`tests/test_core.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.2.0 (30 Tests: `test_01` .. `test_30`)
+Version: 1.3.0 (34 Tests: `test_01` .. `test_34`)
 
 Covers:
   - Layer 1: VRK v0.3.1 SHA-256 hash-chain, Ed25519 signature, & tamper rejection (`test_01`, `test_02`, `test_05`)
@@ -45,6 +45,8 @@ from shark_protocol.kernel import (
     VRK_TRUST_ROOT_DIGEST,
     BasinCollapseError,
     Ed25519AuthoritySigner,
+    IsolatedSignerSubprocess,
+    certify_wp19_piecewise_duhamel_bridge,
     LRSCCompressor,
     LifecycleEvent,
     LifecycleState,
@@ -177,7 +179,7 @@ class TestSharkProtocolSuite(unittest.TestCase):
             with urllib_request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as resp:
                 health = json.loads(resp.read().decode("utf-8"))
                 self.assertEqual(health["status"], "healthy")
-                self.assertEqual(health["version"], "1.2.0")
+                self.assertEqual(health["version"], "1.3.0")
                 self.assertEqual(health["doi"], "10.5281/zenodo.23635351")
 
             req = urllib_request.Request(
@@ -218,7 +220,7 @@ class TestSharkProtocolSuite(unittest.TestCase):
         expected = {
             "BoundaryVerification.lean": (9, "49229b6163b5a3a77dc83779a7dc5350502ff2b3d6a7f2de4d39996f4460e417"),
             "ExistenceVerification.lean": (17, "eec9486803fb2e12f94c3ef966098acd31e4a66df8269ebe8cb59a937f7abcae"),
-            "TypestateLifecycle.lean": (12, None),
+            "TypestateLifecycle.lean": (15, None),
         }
         total_theorems = 0
         for fname, (min_thms, exp_sha) in expected.items():
@@ -240,7 +242,7 @@ class TestSharkProtocolSuite(unittest.TestCase):
                 for t_name in thms:
                     self.assertIn(f"#print axioms {t_name}", clean, f"Missing #print axioms for {t_name}")
             total_theorems += len(thms)
-        self.assertEqual(total_theorems, 38)
+        self.assertEqual(total_theorems, 41)
 
     def test_15_redteam_problem1_patankar_interval_impulse_burst(self) -> None:
         engine = SharkProtocolEngine(P_0=4.0, lam_sim=7.2, lam_lucid=0.3, kappa_meta=2.5)
@@ -672,6 +674,74 @@ class TestSharkProtocolSuite(unittest.TestCase):
                 slot.transition(ev)
             self.assertEqual(slot.state, LifecycleState.ZEROED_FREED)
             self.assertTrue(slot.is_zeroed)
+
+
+    def test_31_track_a_mpmath_iv_200bit_patankar_interval_bridge(self) -> None:
+        """Track A: 200-bit outward-rounded mpmath.iv Patankar-Euler enclosure & INTERVAL_CERTIFIED_RESULT VRK seal."""
+        engine = SharkProtocolEngine(P_0=4.0, lam_sim=7.2, lam_lucid=0.3, kappa_meta=2.5)
+        bundle = engine.seal_interval_certified_patankar_claim(dt=0.05, P_0=4.0, dps=60)
+        cert = bundle["certificate"]
+        vrk = bundle["vrk_entry"]
+
+        self.assertTrue(cert["inside_B4_mp_iv_certified"])
+        self.assertLess(cert["max_mp_iv_width"], 1e-45)
+        self.assertLess(cert["float64_to_mp_iv_max_drift"], 1e-12)
+        self.assertEqual(vrk["claim_class"], "INTERVAL_CERTIFIED_RESULT")
+        ok, msg = engine.verify_ledger_integrity()
+        self.assertTrue(ok, msg)
+
+    def test_32_track_b_multi_principal_subprocess_key_isolation(self) -> None:
+        """Track B: IsolatedSignerSubprocess holds Ed25519 seed in a separate OS PID; parent holds no seed and EXPORT_KEY is rejected."""
+        custom_seed = b"\x42" * 32
+        direct_signer = Ed25519AuthoritySigner(seed=custom_seed)
+        with IsolatedSignerSubprocess(seed=custom_seed) as iso_signer:
+            self.assertNotEqual(iso_signer.pid, os.getpid())
+            self.assertIsNone(iso_signer._seed)
+            self.assertEqual(iso_signer.public_key_hex, direct_signer.public_key_hex)
+
+            # Inspect all attributes of parent iso_signer object to confirm raw seed bytes are absent
+            for attr_val in vars(iso_signer).values():
+                self.assertNotEqual(attr_val, custom_seed)
+                self.assertNotEqual(attr_val, custom_seed.hex())
+
+            test_digest = hashlib.sha256(b"track_b_subprocess_isolation_test").hexdigest()
+            sig_iso = iso_signer.sign_digest_hex(test_digest)
+            self.assertEqual(sig_iso, direct_signer.sign_digest_hex(test_digest))
+            self.assertTrue(
+                Ed25519AuthoritySigner.verify_digest_signature(iso_signer.public_key_hex, test_digest, sig_iso)
+            )
+
+            # Unauthorized IPC command attempting to export private key is deterministically rejected
+            bad_resp = iso_signer.send_raw_command("EXPORT_SECRET_KEY")
+            self.assertFalse(bad_resp["ok"])
+            self.assertIn("Forbidden IPC command", bad_resp["error"])
+
+    def test_33_track_c_wp19_piecewise_duhamel_120_segment_interval_bridge(self) -> None:
+        """Track C: 120-segment piecewise Duhamel interval verifier vs. whole-path Gronwall blowup & VRK seal."""
+        engine = SharkProtocolEngine()
+        bundle = engine.seal_wp19_duhamel_interval_claim(local_dissipative_rate="-3.50")
+        cert = bundle["certificate"]
+        vrk = bundle["vrk_entry"]
+
+        self.assertEqual(cert["n_segments"], 120)
+        self.assertTrue(cert["duhamel_remainder_below_c500_bound"])
+        self.assertTrue(cert["preserved_whole_path_exceeds_c500_bound"])
+        self.assertLess(cert["piecewise_duhamel_interval_hi"], 1.0)
+        self.assertGreater(cert["suppression_factor_lo"], 1e10)
+        self.assertGreater(cert["critical_segment_growth_rate_mu_crit"], 20.0)
+        self.assertEqual(cert["continuum_all_cutoff_status"], "OPEN")
+        self.assertEqual(vrk["claim_class"], "INTERVAL_CERTIFIED_RESULT")
+        ok, msg = engine.verify_ledger_integrity()
+        self.assertTrue(ok, msg)
+
+    def test_34_cli_full_3track_lifecycle_and_redteam_audit(self) -> None:
+        """Verify run_lifecycle_and_redteam_audit passes all Track A, B, and C gates."""
+        engine = SharkProtocolEngine()
+        report = engine.run_lifecycle_and_redteam_audit()
+        self.assertTrue(report["track_a_mpmath_iv_200bit_certified"])
+        self.assertTrue(report["track_b_isolated_signer_subprocess_verified"])
+        self.assertTrue(report["track_c_wp19_piecewise_duhamel_certified"])
+        self.assertTrue(report["all_checks_passed"])
 
 
 if __name__ == "__main__":
