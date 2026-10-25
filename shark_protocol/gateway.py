@@ -1,23 +1,41 @@
 """
-Layer 4: Fail-Closed Multi-Cloud Execution Gateway & Local Loopback HTTP Proxy (`shark_protocol/gateway.py`)
+Layer 4: Fail-Closed Multi-Cloud Execution Gateway & Hardened Loopback HTTP Proxy (`shark_protocol/gateway.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.2.0 (Zenodo v4 Final Edition | Lineage DOIs: 10.5281/zenodo.23624605, 10.5281/zenodo.23620074, 10.5281/zenodo.23618033)
+Version: 1.2.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v3 DOI: 10.5281/zenodo.23624605)
 
-What Is and Is Not Verified in CI:
-- The deterministic local verification pipeline (`VRK_OFFLINE_SEALED_SIMULATION`), per-tenant
-  session isolation (`get_tenant_engine`), waking basal drive floor (`min_waking_p0 = 1.0`), and
-  local loopback HTTP server (`127.0.0.1`) are exercised and verified in the automated test suite.
-- External cloud provider dispatch (`LIVE_API_DISPATCH` across Groq, Together AI, Google Gemini,
-  and Hugging Face) is an optional runtime integration interface requiring user-supplied API keys
-  in `.env` and is not claimed as verified in offline CI runs.
+Audit Item 4 Hardening Summary:
+1. Strict Fail-Closed Provider Dispatch:
+   - Silent cross-provider fallback is disabled by default (`allow_failover=False`).
+   - If a live API key is configured for the target provider (or `require_live_dispatch=True`) and
+     the external HTTP call fails, `process_request` aborts the request slot (`ABORTED_POISONED` ->
+     `ZEROED_FREED`) and raises `GatewayDispatchError` fail-closed. It NEVER falls back to returning
+     a simulated response string when live dispatch fails.
+   - Offline simulation (`VRK_OFFLINE_SEALED_SIMULATION`) runs only when no live API key is configured
+     and `require_live_dispatch=False`, cross-checking both `step_ode` (RK4) and
+     `step_ode_patankar_interval` (Patankar-Euler) before sealing.
+2. Bounded-LRU Per-Tenant Engine Isolation:
+   - Validates `tenant_id` against `^[A-Za-z0-9_.-]{1,64}$` and bounds `_tenant_engines` using an
+     `OrderedDict` LRU cache (`max_tenants=128`) so unauthenticated tenant strings cannot exhaust memory.
+3. Header-Only API Key Transmission:
+   - Sends the Google Gemini API key via the `x-goog-api-key` HTTP header, never in the URL query string.
+4. Hardened `ThreadingHTTPServer`:
+   - Uses concurrent `ThreadingHTTPServer` instead of single-threaded `HTTPServer`.
+   - Enforces `MAX_CONTENT_LENGTH = 65536` (returning HTTP `413 Payload Too Large` before reading oversized bodies).
+   - Refuses non-loopback bind hosts (such as `0.0.0.0`) unless `allow_remote=True` AND a non-empty Bearer token
+     (`auth_token` or `SHARK_GATEWAY_BEARER_TOKEN`) is configured, verified via `hmac.compare_digest`.
+   - Returns sanitized JSON on HTTP `500` without leaking internal exception tracebacks (`str(exc)`).
 """
 
 from __future__ import annotations
 
+import collections
+import hashlib
+import hmac
 import json
 import os
+import re
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -31,9 +49,17 @@ from .kernel import (
 
 load_dotenv()
 
+TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+MAX_HTTP_CONTENT_LENGTH = 65536
+
 
 class GatewayConfigError(ValueError):
-    """Raised when an unsupported provider is requested."""
+    """Raised when an invalid provider, tenant_id, or unsafe HTTP bind configuration is requested."""
+
+
+class GatewayDispatchError(RuntimeError):
+    """Raised fail-closed when a live external cloud provider dispatch fails."""
 
 
 SUPPORTED_PROVIDERS: Dict[str, Dict[str, str]] = {
@@ -64,50 +90,72 @@ class MultiProviderGateway:
     """
     Four-layer execution gateway binding every request to:
       1. Layer 1B: Thread-safe `WorkerEpochGuard` + `RequestSlot` typestate lifecycle
-      2. Layer 2 : Per-tenant isolated 4D Soft-Wall ODE step with waking basal drive floor
-                   (`min_waking_p0 >= 1.0 >> P_crit = 10/99`, resolving Probe B saturation DoS)
-      3. Layer 3 : Bandlimited LRSC 11/99 spectral compression (`LRSCCompressor` with dual digest)
-      4. Layer 1 : Append-only `intentseal-vrk-claim-v2` SHA-256 ledger seal
+      2. Layer 2 : Bounded-LRU per-tenant isolated 4D Soft-Wall ODE dual-solver step with waking
+                   basal drive floor (`min_waking_p0 >= 1.0 >> P_crit = 10/99`)
+      3. Layer 3 : Bandlimited LRSC 11/99 spectral compression (`LRSCCompressor` with prompt commitment)
+      4. Layer 1 : Append-only Ed25519-signed `intentseal-vrk-claim-v2` SHA-256 ledger seal
     """
 
     def __init__(
         self,
         engine: Optional[SharkProtocolEngine] = None,
         min_waking_p0: float = 1.0,
+        max_tenants: int = 128,
     ) -> None:
         if min_waking_p0 < 10.0 / 99.0:
             raise ValueError("min_waking_p0 must be >= P_crit = 10/99 to guarantee waking basin persistence.")
+        if max_tenants < 1:
+            raise ValueError("max_tenants must be >= 1")
         self.min_waking_p0 = float(min_waking_p0)
+        self.max_tenants = int(max_tenants)
         self.engine = engine if engine is not None else SharkProtocolEngine()
         self._gateway_lock = threading.RLock()
-        self._tenant_engines: Dict[str, SharkProtocolEngine] = {"default": self.engine}
+        self._tenant_engines: "collections.OrderedDict[str, SharkProtocolEngine]" = collections.OrderedDict()
+        self._tenant_engines["default"] = self.engine
 
     def get_tenant_engine(self, tenant_id: str = "default") -> SharkProtocolEngine:
-        """Return an isolated `SharkProtocolEngine` for `tenant_id` (Probe B multi-tenant DoS guard)."""
+        """Return a bounded-LRU isolated `SharkProtocolEngine` for `tenant_id`."""
         norm_id = (tenant_id or "default").strip() or "default"
+        if not TENANT_ID_PATTERN.match(norm_id):
+            raise GatewayConfigError(
+                f"Invalid tenant_id '{tenant_id}': must match ^[A-Za-z0-9_.-]{{1,64}}$."
+            )
         with self._gateway_lock:
-            if norm_id not in self._tenant_engines:
-                self._tenant_engines[norm_id] = SharkProtocolEngine(
-                    a=self.engine.a,
-                    b=self.engine.b,
-                    c=self.engine.c,
-                    e_gain=self.engine.e_gain,
-                    f=self.engine.f,
-                    g=self.engine.g,
-                    E_avail=self.engine.E_avail,
-                    I_erase=self.engine.I_erase,
-                    gamma_max=self.engine.gamma_max,
-                    H_max=self.engine.H_max,
-                    eps_H=self.engine.eps_H,
-                    eps_I=self.engine.eps_I,
-                    sigma_0=self.engine.sigma_0,
-                    mu_Psi=self.engine.mu_Psi,
-                    P_0=self.engine.P_0,
-                    lam_sim=self.engine.lam_sim,
-                    lam_lucid=self.engine.lam_lucid,
-                    kappa_meta=self.engine.kappa_meta,
-                )
-            return self._tenant_engines[norm_id]
+            if norm_id in self._tenant_engines:
+                self._tenant_engines.move_to_end(norm_id)
+                return self._tenant_engines[norm_id]
+
+            while len(self._tenant_engines) >= self.max_tenants:
+                # Evict oldest non-default tenant (or oldest entry if max_tenants == 1)
+                oldest_key = next(iter(self._tenant_engines))
+                if oldest_key == "default" and len(self._tenant_engines) > 1:
+                    second_key = list(self._tenant_engines.keys())[1]
+                    del self._tenant_engines[second_key]
+                else:
+                    self._tenant_engines.popitem(last=False)
+
+            new_eng = SharkProtocolEngine(
+                a=self.engine.a,
+                b=self.engine.b,
+                c=self.engine.c,
+                e_gain=self.engine.e_gain,
+                f=self.engine.f,
+                g=self.engine.g,
+                E_avail=self.engine.E_avail,
+                I_erase=self.engine.I_erase,
+                gamma_max=self.engine.gamma_max,
+                H_max=self.engine.H_max,
+                eps_H=self.engine.eps_H,
+                eps_I=self.engine.eps_I,
+                sigma_0=self.engine.sigma_0,
+                mu_Psi=self.engine.mu_Psi,
+                P_0=self.engine.P_0,
+                lam_sim=self.engine.lam_sim,
+                lam_lucid=self.engine.lam_lucid,
+                kappa_meta=self.engine.kappa_meta,
+            )
+            self._tenant_engines[norm_id] = new_eng
+            return new_eng
 
     @staticmethod
     def _has_usable_key(env_var: str) -> Optional[str]:
@@ -129,9 +177,10 @@ class MultiProviderGateway:
             data = resp.json()
             return str(data["choices"][0]["message"]["content"])
         if provider == "gemini":
+            # Audit Item 4 Fix: Send Gemini API key in x-goog-api-key header, never in URL query string
             resp = requests.post(
-                f"{spec['url']}?key={api_key}",
-                headers={"Content-Type": "application/json"},
+                spec["url"],
+                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
                 json={"contents": [{"parts": [{"text": prompt}]}]},
                 timeout=15,
             )
@@ -159,6 +208,8 @@ class MultiProviderGateway:
         simulate_oom_abort: bool = False,
         tenant_id: str = "default",
         requested_p0: Optional[float] = None,
+        allow_failover: bool = False,
+        require_live_dispatch: bool = False,
     ) -> Dict[str, Any]:
         provider_norm = provider.strip().lower()
         if provider_norm not in SUPPORTED_PROVIDERS:
@@ -168,7 +219,6 @@ class MultiProviderGateway:
             )
 
         target_engine = self.get_tenant_engine(tenant_id)
-        # Probe B Waking Basal Drive Floor: clamps any zero/negative P_0 request to >= min_waking_p0
         raw_p0 = (1.0 + min(5.0, len(prompt) / 80.0)) if requested_p0 is None else float(requested_p0)
         effective_p0 = max(self.min_waking_p0, min(6.0, raw_p0))
 
@@ -179,12 +229,14 @@ class MultiProviderGateway:
                 raise TypestateViolationError("Simulated OOM abort during PARTIAL_INIT; request slot poisoned.")
 
             psi_before = float(target_engine.state[3])
-            ode_snapshot = target_engine.step_ode(dt=0.05, P_0=effective_p0)
+            ode_snapshot = target_engine.step_ode(dt=0.025, P_0=effective_p0)
+            patankar_snapshot = target_engine.step_ode_patankar_interval(dt=0.025, P_0=effective_p0)
+            ode_snapshot["patankar_certified"] = patankar_snapshot["inside_B4_certified"]
             separatrix_check = target_engine.evaluate_basin_separatrix_guard(
                 dt_window=0.05,
                 psi_before=psi_before,
-                psi_after=ode_snapshot["Psi"],
-                gamma_after=ode_snapshot["gamma"],
+                psi_after=float(target_engine.state[3]),
+                gamma_after=float(target_engine.state[0]),
                 P_0=effective_p0,
                 enforce_cycle_basin=True,
             )
@@ -194,6 +246,7 @@ class MultiProviderGateway:
                 LifecycleEvent.SEAL_SUCCESS,
                 payload={
                     "prompt": prompt,
+                    "prompt_sha256": lrsc_bundle["prompt_sha256"],
                     "provider": provider_norm,
                     "tenant_id": tenant_id,
                     "lrsc_sha256": lrsc_bundle["lrsc_sha256"],
@@ -203,27 +256,56 @@ class MultiProviderGateway:
             )
             verified_payload = target_engine.epoch_guard.read_slot(slot)
 
-            # Determine whether live API dispatch is configured or offline simulation applies
-            dispatch_mode = "VRK_OFFLINE_SEALED_SIMULATION"
-            used_provider = provider_norm
-            response_text = (
-                f"[VRK_OFFLINE_SEALED_SIMULATION] Verified 4-layer execution for provider='{provider_norm}' "
-                f"(LRSC={lrsc_bundle['compression_ratio_exact']}, digest={lrsc_bundle['lrsc_sha256'][:12]}...)."
-            )
+            # Audit Item 4 Fix: Strict fail-closed provider dispatch
+            candidate_order: List[str] = [provider_norm]
+            if allow_failover:
+                candidate_order.extend(
+                    p for p in ("groq", "together", "gemini", "huggingface") if p != provider_norm
+                )
 
-            candidate_order: List[str] = [provider_norm] + [
-                p for p in ("groq", "together", "gemini", "huggingface") if p != provider_norm
+            configured_candidates = [
+                (cand, self._has_usable_key(SUPPORTED_PROVIDERS[cand]["env_key"]))
+                for cand in candidate_order
             ]
-            for cand in candidate_order:
-                key = self._has_usable_key(SUPPORTED_PROVIDERS[cand]["env_key"])
-                if key is not None:
+            usable_candidates = [(cand, key) for cand, key in configured_candidates if key is not None]
+
+            if usable_candidates:
+                last_err: Optional[Exception] = None
+                response_text = ""
+                used_provider = provider_norm
+                dispatch_mode = "LIVE_API_DISPATCH"
+                succeeded = False
+                for cand, key in usable_candidates:
                     try:
                         response_text = self._dispatch_external_provider(cand, verified_payload["prompt"], key)
-                        dispatch_mode = "LIVE_API_DISPATCH"
                         used_provider = cand
+                        succeeded = True
                         break
-                    except Exception:
-                        continue
+                    except Exception as exc:
+                        last_err = exc
+                        if not allow_failover:
+                            break
+                if not succeeded:
+                    raise GatewayDispatchError(
+                        f"Fail-closed gateway error: live dispatch failed for provider '{provider_norm}' "
+                        f"(allow_failover={allow_failover}): {type(last_err).__name__}"
+                    ) from last_err
+            else:
+                if require_live_dispatch:
+                    raise GatewayDispatchError(
+                        f"Fail-closed gateway error: require_live_dispatch=True but no usable API key "
+                        f"is configured for provider '{provider_norm}'."
+                    )
+                dispatch_mode = "VRK_OFFLINE_SEALED_SIMULATION"
+                used_provider = provider_norm
+                response_text = (
+                    f"[VRK_OFFLINE_SEALED_SIMULATION] Verified 4-layer execution for provider='{provider_norm}' "
+                    f"(LRSC={lrsc_bundle['compression_ratio_exact']}, prompt_sha256={lrsc_bundle['prompt_sha256'][:12]}..., "
+                    f"lrsc_sha256={lrsc_bundle['lrsc_sha256'][:12]}...)."
+                )
+
+            prompt_sha256 = lrsc_bundle["prompt_sha256"]
+            response_sha256 = hashlib.sha256(response_text.encode("utf-8")).hexdigest()
 
             vrk_entry = target_engine.seal_claim(
                 claim_id=f"gateway.exec.{tenant_id}.epoch_{slot.slot_epoch}",
@@ -231,6 +313,8 @@ class MultiProviderGateway:
                 claim_class="REPRODUCED_RESULT",
                 lrsc_digest=lrsc_bundle["lrsc_sha256"],
                 uncompressed_ring_digest=lrsc_bundle["uncompressed_fallback_sha256"],
+                prompt_sha256=prompt_sha256,
+                response_sha256=response_sha256,
             )
             target_engine.epoch_guard.finish_request(slot, abort=False)
 
@@ -240,6 +324,8 @@ class MultiProviderGateway:
                 "provider": used_provider,
                 "tenant_id": tenant_id,
                 "effective_p0": effective_p0,
+                "prompt_sha256": prompt_sha256,
+                "response_sha256": response_sha256,
                 "separatrix_guard": separatrix_check,
                 "worker_epoch": slot.slot_epoch,
                 "slot_final_state": slot.state.value,
@@ -258,7 +344,20 @@ def create_gateway_http_server(
     host: str = "127.0.0.1",
     port: int = 8000,
     gateway: Optional[MultiProviderGateway] = None,
-) -> Tuple[HTTPServer, MultiProviderGateway]:
+    allow_remote: bool = False,
+    auth_token: Optional[str] = None,
+    max_content_length: int = MAX_HTTP_CONTENT_LENGTH,
+) -> Tuple[ThreadingHTTPServer, MultiProviderGateway]:
+    norm_host = host.strip()
+    effective_token = (auth_token if auth_token is not None else os.environ.get("SHARK_GATEWAY_BEARER_TOKEN", "")).strip()
+
+    if norm_host not in LOOPBACK_HOSTS:
+        if not allow_remote or not effective_token:
+            raise GatewayConfigError(
+                f"Refusing to bind HTTP gateway to non-loopback host '{norm_host}' without both "
+                f"allow_remote=True and a non-empty SHARK_GATEWAY_BEARER_TOKEN."
+            )
+
     gw = gateway if gateway is not None else MultiProviderGateway()
 
     class GatewayHTTPHandler(BaseHTTPRequestHandler):
@@ -273,12 +372,23 @@ def create_gateway_http_server(
             self.end_headers()
             self.wfile.write(raw)
 
+        def _check_auth(self) -> bool:
+            if not effective_token:
+                return True
+            hdr = self.headers.get("Authorization", "")
+            expected = f"Bearer {effective_token}"
+            return hmac.compare_digest(hdr.encode("utf-8"), expected.encode("utf-8"))
+
         def do_GET(self) -> None:
+            if not self._check_auth():
+                self._send_json(401, {"error": "Unauthorized: missing or invalid Bearer token."})
+                return
             if self.path == "/health":
                 ok, detail = gw.engine.verify_ledger_integrity()
                 self._send_json(200, {
                     "status": "healthy" if ok else "degraded",
                     "version": "1.2.0",
+                    "concept_doi": "10.5281/zenodo.23618032",
                     "doi": "10.5281/zenodo.23624605",
                     "vrk_chain_status": detail,
                     "ledger_length": len(gw.engine.ledger),
@@ -288,29 +398,59 @@ def create_gateway_http_server(
                 self._send_json(404, {"error": "Not found"})
 
         def do_POST(self) -> None:
+            if not self._check_auth():
+                self._send_json(401, {"error": "Unauthorized: missing or invalid Bearer token."})
+                return
             if self.path == "/v1/execute":
-                length = int(self.headers.get("Content-Length", "0"))
+                raw_len = self.headers.get("Content-Length", "0")
+                try:
+                    length = int(raw_len)
+                except ValueError:
+                    self._send_json(400, {"error": "Invalid Content-Length header."})
+                    return
+                if length < 0:
+                    self._send_json(400, {"error": "Negative Content-Length header."})
+                    return
+                if length > max_content_length:
+                    self._send_json(413, {
+                        "error": f"Payload Too Large: Content-Length {length} exceeds limit ({max_content_length} bytes)."
+                    })
+                    return
+
                 body_bytes = self.rfile.read(length) if length > 0 else b"{}"
                 try:
                     req_data = json.loads(body_bytes.decode("utf-8"))
+                    if not isinstance(req_data, dict):
+                        raise GatewayConfigError("Request JSON payload must be an object.")
                     prompt = str(req_data.get("prompt", ""))
                     provider = str(req_data.get("provider", "groq"))
                     tenant_id = str(req_data.get("tenant_id", "default"))
                     result = gw.process_request(prompt=prompt, provider=provider, tenant_id=tenant_id)
                     self._send_json(200, result)
-                except GatewayConfigError as exc:
+                except (GatewayConfigError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                     self._send_json(400, {"error": str(exc)})
-                except Exception as exc:
-                    self._send_json(500, {"error": str(exc)})
+                except Exception:
+                    # Audit Item 4 Fix: Never leak internal exception tracebacks or str(exc) on 500
+                    self._send_json(500, {
+                        "error": "Internal gateway verification error (slot poisoned and zeroed).",
+                        "status": "FAIL_CLOSED",
+                    })
             else:
                 self._send_json(404, {"error": "Not found"})
 
-    server = HTTPServer((host, port), GatewayHTTPHandler)
+    server = ThreadingHTTPServer((norm_host, port), GatewayHTTPHandler)
     return server, gw
 
 
-def run_http_gateway_server(host: str = "127.0.0.1", port: int = 8000) -> None:
-    server, _ = create_gateway_http_server(host=host, port=port)
+def run_http_gateway_server(
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    allow_remote: bool = False,
+    auth_token: Optional[str] = None,
+) -> None:
+    server, _ = create_gateway_http_server(
+        host=host, port=port, allow_remote=allow_remote, auth_token=auth_token
+    )
     print(f"The Shark Protocol (v1.2.0) HTTP Security Gateway listening on http://{host}:{port}")
     try:
         server.serve_forever()

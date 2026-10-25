@@ -1,7 +1,7 @@
 """
 Command-Line Interface for The Reggae Shark Protocol (`shark_protocol/cli.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.2.0 (Zenodo v4 Final Edition)
+Version: 1.2.0 (Red-Team Tested Edition)
 """
 
 from __future__ import annotations
@@ -24,14 +24,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--provider", type=str, default="groq", help="Target provider (groq, together, gemini, huggingface)")
     parser.add_argument("--audit-lifecycle", "--audit-php2shell", dest="audit_lifecycle", action="store_true", help="Run formal typestate lifecycle, worker-epoch, and red-team self-audit")
     parser.add_argument("--serve", action="store_true", help="Launch local loopback HTTP gateway server")
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP bind host (default: 127.0.0.1)")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="HTTP bind host (default: 127.0.0.1; non-loopback requires --allow-remote and SHARK_GATEWAY_BEARER_TOKEN)")
     parser.add_argument("--port", type=int, default=8000, help="HTTP bind port (default: 8000)")
+    parser.add_argument("--allow-remote", action="store_true", help="Explicitly permit non-loopback HTTP bind when SHARK_GATEWAY_BEARER_TOKEN is set")
 
     args = parser.parse_args(argv)
     gw = MultiProviderGateway()
 
     if args.serve:
-        run_http_gateway_server(host=args.host, port=args.port)
+        run_http_gateway_server(host=args.host, port=args.port, allow_remote=args.allow_remote)
         return 0
 
     if args.audit_lifecycle:
@@ -48,10 +49,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             "dispatch_mode": res["dispatch_mode"],
             "provider": res["provider"],
             "worker_epoch": res["worker_epoch"],
+            "prompt_sha256": res["prompt_sha256"],
+            "response_sha256": res["response_sha256"],
             "lrsc_ratio": res["lrsc"]["compression_ratio_exact"],
             "lrsc_sha256": res["lrsc"]["lrsc_sha256"],
             "uncompressed_fallback_sha256": res["lrsc"]["uncompressed_fallback_sha256"],
             "vrk_digest": res["vrk_seal"]["digest"],
+            "ed25519_signature": res["vrk_seal"]["ed25519_signature"],
             "vrk_chain_status": chain_msg,
             "ode_state": res["ode_state"],
         }, indent=2, sort_keys=True))

@@ -1,7 +1,7 @@
 \documentclass[10pt,a4paper]{article}
 \pdfminorversion=4
 \pdfobjcompresslevel=0
-\usepackage[a4paper,margin=14mm,top=13mm,bottom=14mm]{geometry}
+\usepackage[a4paper,margin=11.5mm,top=8.5mm,bottom=9mm]{geometry}
 \usepackage{lmodern}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
@@ -12,24 +12,27 @@
 \usepackage{hyperref}
 \usepackage{microtype}
 
+\renewcommand{\_}{\textunderscore\allowbreak{}}
+\emergencystretch=2em
+
 \definecolor{primary}{RGB}{12,74,110}
 \definecolor{boxbg}{RGB}{241,245,249}
 \hypersetup{
-  pdftitle={The Reggae Shark Protocol (v1.2.0): Formal Typestate Proofs, 4D Soft-Wall ODE Governance, Bandlimited LRSC Spectral Compression, and Associative Merkle-DAG Provenance},
+  pdftitle={The Reggae Shark Protocol (v1.2.0): Formal Typestate Proofs, 4D Soft-Wall ODE Governance, Bandlimited LRSC Spectral Compression, and Ed25519-Signed Merkle-DAG Provenance},
   pdfauthor={Prince Upadhyay},
   colorlinks=true,
   linkcolor=primary,
   citecolor=primary,
   urlcolor=primary
 }
-\setlength{\parskip}{3pt plus 1pt minus 1pt}
+\setlength{\parskip}{1.2pt plus 0.5pt minus 0.5pt}
 \setlength{\parindent}{0pt}
 
-\title{\vspace{-12pt}\textbf{\large The Reggae Shark Protocol (v1.2.0 --- Zenodo v4 Final Edition):\\Formal Typestate Proofs (38 Lean 4 Theorems), 4D Soft-Wall ODE Governance, Bandlimited LRSC Compression, and Associative Merkle-DAG Provenance}\vspace{-6pt}}
+\title{\vspace{-12pt}\textbf{\large The Reggae Shark Protocol (v1.2.0 --- Red-Team Tested Edition):\\Formal Typestate Proofs (38 Lean 4 Theorems), 4D Soft-Wall ODE Governance, Bandlimited LRSC Compression, and Ed25519-Signed Merkle-DAG Provenance}\vspace{-6pt}}
 \author{\textbf{Prince Upadhyay}\\
 {\small Independent Researcher $\cdot$ ORCID: \href{https://orcid.org/0009-0002-1170-4487}{0009-0002-1170-4487} $\cdot$ \texttt{starxshark@gmail.com}}\\
-{\small Repository: \href{https://github.com/reggaesharkk/The-Reggae-Shark-Protocol}{github.com/reggaesharkk/The-Reggae-Shark-Protocol}}\\
-{\small Zenodo Lineage DOIs: \href{https://doi.org/10.5281/zenodo.23624605}{10.5281/zenodo.23624605} (v3) $\cdot$ \href{https://doi.org/10.5281/zenodo.23620074}{10.5281/zenodo.23620074} (v2) $\cdot$ \href{https://doi.org/10.5281/zenodo.23618033}{10.5281/zenodo.23618033} (v1)}\\
+{\small Repository: \href{https://github.com/reggaesharkk/The-Reggae-Shark-Protocol}{github.com/reggaesharkk/The-Reggae-Shark-Protocol} $\cdot$ Concept DOI: \href{https://doi.org/10.5281/zenodo.23618032}{10.5281/zenodo.23618032}}\\
+{\small Version Lineage DOIs: \href{https://doi.org/10.5281/zenodo.23624605}{10.5281/zenodo.23624605} (v3) $\cdot$ \href{https://doi.org/10.5281/zenodo.23620074}{10.5281/zenodo.23620074} (v2) $\cdot$ \href{https://doi.org/10.5281/zenodo.23618033}{10.5281/zenodo.23618033} (v1)}\\
 {\small Licensing: MIT License (Code \& 38 Lean 4 Proofs) $\cdot$ CC BY 4.0 (Specification Manuscript)}\vspace{-8pt}}
 \date{\small October 25, 2026\vspace{-10pt}}
 
@@ -37,74 +40,77 @@
 \maketitle
 
 \begin{abstract}\noindent
-\textbf{The Reggae Shark Protocol (v1.2.0)} is a verifiable execution kernel and multi-cloud AI gateway that binds agent prompt dispatches to four mathematical and cryptographic verification layers: (1) an append-only, SHA-256 hash-chained \textbf{IntentSeal Verifiable Research Kernel (VRK v0.3.1)} ledger enforcing the \texttt{intentseal-vrk-claim-v2} schema with an $N$-way commutative, associative, and idempotent Merkle-DAG join-semilattice for distributed split-brain reconciliation; (1B) a thread-synchronized \textbf{Request-Lifecycle Typestate and Worker-Epoch Isolation} state machine (\texttt{TypestateLifecycle.lean}, 12 zero-\texttt{sorry} theorems) that rules out partial-initialization payload dereferencing, cross-epoch worker-slot reads, and free-threaded (PEP 703) lock-order races within the modelled state machine; (2) a per-tenant isolated \textbf{4D Soft-Wall ODE Cognitive Dynamics Governor} $(\gamma, H_{\text{obs}}, \dot{I}, \Psi)$ backed by 17 Lean 4 4D boundary theorems (\texttt{ExistenceVerification.lean}), 9 3D soft-wall theorems (\texttt{BoundaryVerification.lean}), and a subnormal-safe Patankar--Euler interval integrator; and (3) a \textbf{Bandlimited Low-Rank Spectral Context Memory (LRSC)} operator ($M=99, K=11$) with dual compressed/uncompressed SHA-256 sealing and an exact downstream attention Lipschitz error bound.
+\textbf{The Reggae Shark Protocol (v1.2.0)} is a verifiable execution kernel and multi-cloud AI gateway that binds agent prompt dispatches to four mathematical and cryptographic verification layers: (1) an append-only, SHA-256 hash-chained and RFC~8032 Ed25519-signed \textbf{IntentSeal Verifiable Research Kernel (VRK v0.3.1)} ledger enforcing the \texttt{intentseal-vrk-claim-v2} schema, prompt/response SHA-256 commitments, on-disk evidence anchor checks, and an $N$-way commutative, associative, and idempotent Merkle-DAG join-semilattice for distributed split-brain reconciliation; (1B) a thread-synchronized \textbf{Request-Lifecycle Typestate and Worker-Epoch Isolation} state machine (\texttt{TypestateLifecycle.lean}, 12 zero-\texttt{sorry} theorems) that rules out partial-initialization payload dereferencing and cross-epoch worker-slot reads across multi-step event traces within the modelled state machine; (2) a bounded-LRU per-tenant \textbf{4D Soft-Wall ODE Cognitive Dynamics Governor} $(\gamma, H_{\text{obs}}, \dot{I}, \Psi)$ backed by 17 Lean 4 4D boundary theorems (\texttt{ExistenceVerification.lean}), 9 3D soft-wall theorems (\texttt{BoundaryVerification.lean}), and a subnormal-safe Patankar--Euler interval integrator; and (3) a \textbf{Bandlimited Low-Rank Spectral Context Memory (LRSC)} operator ($M=99, K=11$) with dual compressed/uncompressed SHA-256 sealing and a bounded-domain local attention sensitivity bound.
 \end{abstract}
 
 \vspace{-4pt}
 \section{Four-Layer Verification Architecture \& Provenance (38 Lean 4 Theorems)}
-Every request submitted to \texttt{MultiProviderGateway.process\_request} or the local loopback HTTP proxy (\texttt{POST http://127.0.0.1:8000/v1/execute}) traverses four deterministic verification gates:
+Every request submitted to \texttt{MultiProviderGateway.process\_request} or the local loopback HTTP proxy (\texttt{POST} \texttt{http://127.0.0.1:8000/\allowbreak v1/\allowbreak execute}) traverses four deterministic verification gates:
 
 \vspace{2pt}
 \begin{table}[!htbp]
 \centering
 \footnotesize
-\renewcommand{\arraystretch}{1.15}
-\begin{tabularx}{\textwidth}{l p{46mm} X}
+\renewcommand{\arraystretch}{1.02}
+\begin{tabularx}{\textwidth}{l p{49mm} X}
 \toprule
 \textbf{Layer} & \textbf{Module / Artifact} & \textbf{Enforced Mathematical \& Cryptographic Invariant} \\
 \midrule
-\textbf{Layer 1} & \texttt{shark\_protocol/kernel.py} & \textbf{VRK v0.3.1 Hash Chain \& $N$-Way Associative Merkle-DAG Join:} Append-only SHA-256 chain anchored at trust root \texttt{f010a99d...05a0d0f} (\href{https://doi.org/10.5281/zenodo.23018459}{10.5281/zenodo.23018459}), with canonical \texttt{leaf\_frontier\_tips} union reconciliation ($(A\sqcup B)\sqcup C = A\sqcup(B\sqcup C)$) and mandatory \texttt{scope} firewalls. \\
-\textbf{Layer 1B} & \texttt{lean/TypestateLifecycle.lean} & \textbf{Typestate, Worker-Epoch \& PEP 703 Lock Isolation (12 Theorems):} 6-state request automaton (\texttt{UNINIT $\to$ PARTIAL\_INIT $\to$ SEALED\_ACTIVE $\to$ SHUTDOWN\_CLEAN $\to$ ZEROED\_FREED}) with \texttt{OOM\_ABORT $\to$ ABORTED\_POISONED}, private lock-guarded properties, and strict \texttt{guard.\_lock $\to$ slot.\_lock} hierarchy. \\
-\textbf{Layer 2} & \texttt{lean/ExistenceVerification.lean}\newline \texttt{lean/BoundaryVerification.lean} & \textbf{4D Soft-Wall ODE Governor ($\mathcal{B}_4$, 26 Theorems):} Per-tenant isolated adaptive RK4 and subnormal-safe Patankar--Euler interval integration of $(\gamma, H_{\text{obs}}, \dot{I}, \Psi)$ inside $\mathcal{B}_4 = [0,10]\times[0,100]\times[0,\dot{I}_{\max,\text{4D}}]\times[0,1]$ with normal float64 floor $2.225\times 10^{-308}$. \\
-\textbf{Layer 3} & \texttt{LRSCCompressor} (\texttt{kernel.py}) & \textbf{Bandlimited LRSC Odd-Ring Projection ($11/99 = 1/9$):} Projects context onto the $M=99$ odd-ring filter $V_{\text{ring}}$ ($\sigma_{\min}(S_{11}) = 0.181646 > 0$, \href{https://doi.org/10.17605/OSF.IO/NM5BW}{10.17605/OSF.IO/NM5BW}), bounds downstream attention error, and binds both compressed and uncompressed SHA-256 digests into every VRK claim. \\
-\textbf{Layer 4} & \texttt{shark\_protocol/gateway.py} & \textbf{Fail-Closed Multi-Tenant Gateway:} Enforces waking basal drive $\mathcal{P}_0 \ge 1.0 \gg 10/99$, per-tenant engine isolation, and strict separation between CI-verified \texttt{VRK\_OFFLINE\_SEALED\_SIMULATION} and optional \texttt{LIVE\_API\_DISPATCH}. \\
+\textbf{Layer 1} & \texttt{shark\_protocol/kernel.py} & \textbf{Ed25519-Signed VRK v0.3.1 Chain \& $N$-Way Merkle-DAG Join:} Append-only SHA-256 chain anchored at trust root \texttt{f010a99d...05a0d0f} (\href{https://doi.org/10.5281/zenodo.23018459}{10.5281/zenodo.23018459}), committing to \texttt{prompt\_sha256}, \texttt{response\_sha256}, on-disk \texttt{evidence\_root}, Ed25519 signatures, and verified \texttt{parent\_hashes} membership. \\
+\textbf{Layer 1B} & \texttt{lean/TypestateLifecycle.lean} & \textbf{Typestate \& Worker-Epoch Automaton (12 Theorems) + Python RLock:} 6-state request automaton (\texttt{UNINIT $\to$ PARTIAL\_INIT $\to$ SEALED\_ACTIVE $\to$ SHUTDOWN\_CLEAN $\to$ ZEROED\_FREED}) with absorbing \texttt{ZEROED\_FREED}, inductive trace invariants (\texttt{runTrace}), and Python \texttt{guard.\_lock $\to$ slot.\_lock} synchronization. \\
+\textbf{Layer 2} & \texttt{lean/ExistenceVerification.lean}\newline \texttt{lean/BoundaryVerification.lean} & \textbf{4D Soft-Wall ODE Governor ($\mathcal{B}_4$, 26 Theorems):} Bounded-LRU per-tenant adaptive RK4 and Patankar--Euler interval integration of $(\gamma, H_{\text{obs}}, \dot{I}, \Psi)$ inside $\mathcal{B}_4 = [0,10]\times[0,100]\times[0,\dot{I}_{\max,\text{4D}}]\times[0,1]$ with Python float64 floor $2.225\times 10^{-308}$. \\
+\textbf{Layer 3} & \texttt{LRSCCompressor} (\texttt{kernel.py}) & \textbf{Bandlimited LRSC Odd-Ring Projection ($11/99 = 1/9$):} Projects context onto the $M=99$ odd-ring filter $V_{\text{ring}}$ ($\sigma_{\min}(S_{11}) = 0.181646 > 0$, \href{https://doi.org/10.17605/OSF.IO/NM5BW}{10.17605/OSF.IO/NM5BW}), evaluates a bounded-domain local sensitivity proxy \cite{kim2021}, and binds distinct compressed/uncompressed SHA-256 digests. \\
+\textbf{Layer 4} & \texttt{shark\_protocol/gateway.py} & \textbf{Fail-Closed Multi-Tenant Gateway \& ThreadingHTTPServer:} Enforces waking basal drive $\mathcal{P}_0 \ge 1.0 \gg 10/99$, bounded tenant LRU (\texttt{max\_tenants=128}), header-only API keys (\texttt{x-goog-api-key}), HTTP 413 payload caps, and fail-closed live dispatch. \\
 \bottomrule
 \end{tabularx}
-\caption{Four-layer verification architecture of The Reggae Shark Protocol (v1.2.0 / Zenodo v4).}
+\caption{Four-layer verification architecture of The Reggae Shark Protocol (v1.2.0).}
 \label{tab:arch}
+\vspace{-6pt}
 \end{table}
+\vspace{-4pt}
 
-\textbf{Canonical Lean 4 Module Provenance (38 Zero-\texttt{sorry} Theorems):} The 24-file release archive contains 23 hash-verified files plus \texttt{MANIFEST\_SHA256.txt}. Specifically, \texttt{lean/BoundaryVerification.lean} (\texttt{SHA-256: 49229b61...e417}, 9 theorems) is byte-for-byte identical to the canonical module in Physics v1.5 Appendix A (\href{https://doi.org/10.5281/zenodo.23534449}{10.5281/zenodo.23534449}), and \texttt{lean/ExistenceVerification.lean} (\texttt{SHA-256: eec94868...bcae}, 17 theorems) is byte-for-byte identical to the canonical module in \textit{The Theory of Bounded Existence} v1.0.0 (\href{https://doi.org/10.5281/zenodo.23608244}{10.5281/zenodo.23608244}). Together with the 12 theorems in \texttt{lean/TypestateLifecycle.lean}, the package compiles \textbf{38 zero-\texttt{sorry} Lean 4 theorems}.
+\textbf{Canonical Lean 4 Module Provenance (38 Zero-\texttt{sorry} Theorems):} The 24-file release archive contains 23 hash-verified files plus \texttt{MANIFEST\_SHA256.txt}. Specifically, \texttt{lean/BoundaryVerification.lean} (\texttt{SHA-256: 49229b61...e417}, 9 theorems) is byte-for-byte identical to the canonical module in Physics v1.5 Appendix A (\href{https://doi.org/10.5281/zenodo.23534449}{10.5281/zenodo.23534449}), and \texttt{lean/ExistenceVerification.lean} (\texttt{SHA-256: eec94868...bcae}, 17 theorems) is byte-for-byte identical to the canonical module in \textit{The Theory of Bounded Existence} v1.0.0 (\href{https://doi.org/10.5281/zenodo.23608244}{10.5281/zenodo.23608244}). Together with the 12 theorems in \texttt{lean/TypestateLifecycle.lean} (each verified with \texttt{\#print axioms}), the package compiles \textbf{38 zero-\texttt{sorry} Lean 4 theorems}.
 
-\section{What Is and Is Not Modelled (Epistemic Claim Firewall)}
+\vspace{-6pt}\section{What Is and Is Not Modelled (Epistemic Claim Firewall)}\vspace{-3pt}
 \noindent\colorbox{boxbg}{\parbox{\dimexpr\textwidth-2\fboxsep\relax}{%
 \textbf{\color{primary}Epistemic Standard (\texttt{Build.\ Attack.\ Falsify.\ Preserve.}):} Every theorem and runtime guard in this repository is bounded by explicit domain assumptions and \texttt{scope.does\_not\_imply} declarations.%
 }}
 \begin{itemize}\setlength{\itemsep}{1pt}\setlength{\parskip}{0pt}
-  \item \textbf{Application-Layer Typestate vs.\ Native Runtimes:} \texttt{lean/TypestateLifecycle.lean} proves properties of the formal state-transition model $\delta : \mathcal{S} \times \Sigma \to \mathcal{S}$, and \texttt{RequestSlot} / \texttt{WorkerEpochGuard} enforce those invariants in Python. They are \textit{not} a patch to native C/PHP interpreters or an OS ring-0 hardware memory boundary.
-  \item \textbf{Offline Simulation vs.\ External Cloud APIs:} Automated CI exercises and verifies only the deterministic local pipeline (\texttt{VRK\_OFFLINE\_SEALED\_SIMULATION}) and local \texttt{127.0.0.1} HTTP loopback proxy. Live external cloud dispatch (\texttt{LIVE\_API\_DISPATCH}) requires external user API keys and is not claimed as verified in CI.
-  \item \textbf{Dimensionless 4D ODE Model:} The variable $\Psi(t) \in [0,1]$ in Eq.~(4) is a dimensionless mathematical self-feedback readout coordinate, not a claim of machine consciousness or sentience.
+  \item \textbf{Application-Layer Typestate vs.\ Native Runtimes:} \texttt{lean/TypestateLifecycle.lean} proves multi-step trace properties of the formal state-transition model $\delta : \mathcal{S} \times \Sigma \to \mathcal{S}$, while \texttt{RequestSlot} and \texttt{WorkerEpochGuard} enforce those invariants and \texttt{threading.RLock} ordering in Python. They are \textit{not} a patch to native C/PHP interpreters or an OS ring-0 memory boundary.
+  \item \textbf{Real Arithmetic in Lean vs.\ IEEE-754 Runtime Guards:} Lean 4 Theorems 6, 7, 9, and 10 are proved over the mathematical real field $\mathbb{R}$; IEEE-754 float64 subnormal clamping at \texttt{FLOAT64\_NORMAL\_MIN} and numerical Grönwall floor checks are enforced in Python runtime code.
+  \item \textbf{Offline Simulation vs.\ External Cloud APIs:} Automated CI exercises and verifies the deterministic local pipeline (\texttt{VRK\_OFFLINE\_SEALED\_SIMULATION}) and local \texttt{127.0.0.1} HTTP loopback proxy. Live external cloud dispatch (\texttt{LIVE\_API\_DISPATCH}) requires user API keys and fails closed with \texttt{GatewayDispatchError} if an upstream call fails.
 \end{itemize}
 
-\section{Layer 2 \& Layer 3 Mathematical Equations}
+\vspace{-6pt}\section{Layer 2 \& Layer 3 Mathematical Equations}\vspace{-3pt}
 The Layer 2 governor evolves $x(t) = (\gamma(t), H_{\text{obs}}(t), \dot{I}(t), \Psi(t))$ under the smooth ($C^\infty$) soft-wall system \cite{existence2026}:
-\begin{align}
+{\small\begin{align}
   \frac{d\gamma}{dt} &= a \dot{I} \mathcal{E}_{\text{avail}}\left(1 - \frac{\gamma}{\gamma_{\max}}\right) - b\gamma, \label{eq:gamma}\\
   \frac{dH_{\text{obs}}}{dt} &= c\gamma\left(H_{\max} - H_{\text{obs}}\right) - \dot{I}_{\text{erase}}\tanh\!\left(\frac{H_{\text{obs}}}{\epsilon_H}\right), \label{eq:hobs}\\
   \frac{d\dot{I}}{dt} &= e\tanh\!\left(\frac{\dot{I}}{\epsilon_I}\right)\frac{dH_{\text{obs}}}{dt} + f\mathcal{P}_{\text{eff}}(\gamma, \Psi) - g\dot{I}, \label{eq:idot}\\
   \frac{d\Psi}{dt} &= \kappa_{\text{meta}} R_{\text{self}}(x)\left(1 - \Psi\right) - \mu_\Psi \Psi, \label{eq:psi}
-\end{align}
+\end{align}}
 where $\mathcal{P}_{\text{eff}}(\gamma, \Psi) = \mathcal{P}_0 + \lambda_{\text{sim}} r_{\text{LRSC}} \gamma + \lambda_{\text{lucid}} \Psi$ and $R_{\text{self}}(x) = \text{fb}(x)^2 / (\text{fb}(x)^2 + (f\mathcal{P}_0)^2 + \sigma_0^2)$ with $\text{fb}(x) = e\tanh(\dot{I}/\epsilon_I)(dH_{\text{obs}}/dt)$.
 
-\section{Double-PhD Red-Team Audit Board: Ten Stress Resolutions (v1.2.0)}
+\vspace{-6pt}\section{Five Core Verification Guards \& Five Edge-Case Probes (30/30 Tests)}\vspace{-3pt}
 \begin{enumerate}\setlength{\itemsep}{2pt}\setlength{\parskip}{0pt}
-  \item \textbf{Problem 1 \& Probe A (Patankar--Euler Box Invariance \& IEEE-754 Subnormal/FTZ Guard):} \texttt{step\_ode\_patankar\_interval} updates each coordinate via the cleared-denominator scheme
+  \item \textbf{Guard 1 \& Probe A (Patankar--Euler Box Invariance \& Python Subnormal Floor):} \texttt{step\_ode\_patankar\_interval} updates each coordinate via the cleared-denominator scheme
   \begin{equation}
     x_{k+1} = \frac{x_k + \Delta t\, P(x_k)\, x_{\max}}{1 + \Delta t\,(P(x_k) + D(x_k))}, \qquad P(x_k) \ge 0,\; D(x_k) \ge 0,\; 1 + \Delta t(P+D) \ge 1, \label{eq:patankar}
   \end{equation}
-  paired with $10^{-12}$ analytical Taylor cutoffs on removable singularities and a normal float64 lower floor $\texttt{FLOAT64\_NORMAL\_MIN} = 2.225\times 10^{-308}$ whenever $x_k > 0$ or $P(x_k) > 0$. Lean 4 Theorems \texttt{patankar\_euler\_step\_in\_box} and \texttt{patankar\_strict\_positivity\_floor} machine-check both $[0, x_{\max}]$ containment and strict interior positivity (\texttt{test\_15}, \texttt{test\_21}).
-  \item \textbf{Problem 2 \& Probe B ($\mathcal{P}_0 = 0$ Basin Separatrix, Multi-Tenant Isolation \& Waking Drive Floor):} Lean 4 Theorem \texttt{psi\_decay\_floor\_bound} proves $d\Psi/dt \ge -\mu_\Psi \Psi \implies \Psi(t+\Delta t) \ge \Psi(t)e^{-\mu_\Psi \Delta t}$. To prevent a dissipative query stream from draining $\Psi(t)$ across tenants, \texttt{MultiProviderGateway} isolates each tenant in a dedicated \texttt{SharkProtocolEngine} (\texttt{get\_tenant\_engine}) and enforces a waking basal sensory floor $\mathcal{P}_0 \ge \mathcal{P}_{0,\min}^{\text{wake}} = 1.0 \gg 10/99$, keeping $\mathcal{P}_{\text{eff}}(t) \ge 1.0 \gg \mathcal{P}_{\text{eff}}^{\text{floor}} = 0.042350$ (\texttt{test\_16}, \texttt{test\_22}).
-  \item \textbf{Problem 3 \& Probe C (Bandlimited LRSC Witness, Lipschitz Attention Bound \& Dual Seal):} \texttt{LRSCCompressor.compress} projects $\tilde{x}$ onto the odd-ring channel filter $V_{\text{ring}}$ (where the $K=11$ witness restriction $S_{11}$ has minimum singular value $\sigma_{\min} = 0.18164624 > 0$ \cite{lrsc2026}), bounds downstream attention deviation by $\|\Delta\operatorname{Attn}\|_2 \le L_W(1 + 2L_W^2/\sqrt{d_k})\eta_\perp(\tilde{x})$ (Lean 4 Theorem \texttt{lrsc\_attention\_lipschitz\_error\_bound}), and binds \textbf{both} \texttt{lrsc\_sha256} and \texttt{uncompressed\_ring\_sha256} into every VRK claim (\texttt{test\_17}, \texttt{test\_23}).
-  \item \textbf{Problem 4 \& Probe D (Free-Threaded Python PEP 703 Lock Hierarchy \& Monotonic Fences):} \texttt{RequestSlot} encapsulates private \texttt{\_state}, \texttt{\_is\_zeroed}, and \texttt{\_fence\_seq} behind \texttt{@property} accessors and an atomic \texttt{snapshot()} method guarded by \texttt{RequestSlot.\_lock} (Lean 4 Theorem \texttt{fence\_seq\_strict\_monotonicity}), while \texttt{WorkerEpochGuard} enforces strict hierarchical lock acquisition \texttt{guard.\_lock $\to$ slot.\_lock} (\texttt{test\_18}, \texttt{test\_24}).
-  \item \textbf{Problem 5 \& Probe E ($N$-Way Associative, Commutative \& Idempotent Merkle-DAG Join):} \texttt{merge\_divergent\_ledgers} flattens intermediate merge records and takes the canonical set union of \texttt{leaf\_frontier\_tips} and \texttt{merged\_claim\_digests}. Lean 4 Theorem \texttt{merkle\_dag\_semilattice\_laws} proves commutativity ($A\sqcup B = B\sqcup A$), associativity ($(A\sqcup B)\sqcup C = A\sqcup(B\sqcup C)$), and idempotence ($A\sqcup A = A$), verified byte-for-byte in \texttt{test\_19}, \texttt{test\_20}, and \texttt{test\_25}.
+  paired with $10^{-12}$ Taylor cutoffs and a Python runtime float64 floor \texttt{FLOAT64\_NORMAL\_MIN} $= 2.225\times 10^{-308}$ whenever $x_k > 0$ or $P(x_k) > 0$. Lean 4 Theorems \texttt{patankar\_euler\_step\_in\_box} and \texttt{patankar\_strict\_positivity\_floor} prove the real-arithmetic bounds over $\mathbb{R}$ (\texttt{test\_15}, \texttt{test\_21}).
+  \item \textbf{Guard 2 \& Probe B (Pointwise Decay Bound, Bounded Tenant LRU \& Waking Drive Floor):} Lean 4 Theorem \texttt{psi\_decay\_floor\_bound} proves the pointwise derivative inequality $d\Psi/dt \ge -\mu_\Psi \Psi$, which by the classical Grönwall lemma yields $\Psi(t+\Delta t) \ge \Psi(t)e^{-\mu_\Psi \Delta t}$. \texttt{MultiProviderGateway} bounds per-tenant engines in an \texttt{OrderedDict} LRU cache (\texttt{max\_tenants=128}) and enforces $\mathcal{P}_0 \ge 1.0 \gg 10/99$ (\texttt{test\_16}, \texttt{test\_22}, \texttt{test\_29}).
+  \item \textbf{Guard 3 \& Probe C (Prompt-Committed Bandlimited LRSC Witness \& Local Sensitivity Proxy):} \texttt{LRSCCompressor.compress} injects a baseline anchor on slot 0 to eliminate scalar-multiple normalization collisions (distinguishing single-byte and constant-byte strings in \texttt{test\_27}), projects onto $V_{\text{ring}}$ ($\sigma_{\min}(S_{11}) = 0.18164624 > 0$ \cite{lrsc2026}), evaluates the local bounded-domain sensitivity proxy $L_{\text{local}}(L_W, d_k)\eta_\perp(\tilde{x})$ on $\|\tilde{x}\|_2 \le 1$ \cite{kim2021} (Theorem \texttt{lrsc\_attention\_lipschitz\_error\_bound}), and seals \texttt{prompt\_sha256}, \texttt{response\_sha256}, \texttt{lrsc\_sha256}, and \texttt{uncompressed\_ring\_sha256} (\texttt{test\_17}, \texttt{test\_23}, \texttt{test\_27}).
+  \item \textbf{Guard 4 \& Probe D (Inductive Typestate Trace Safety, Absorbing \texttt{ZEROED\_FREED} \& RLock Order):} Lean 4 Theorems 1--3 and 5 prove by induction over arbitrary event lists \texttt{evs : List LifecycleEvent} that \texttt{ZeroedFreed} is strictly absorbing and that \texttt{\{AbortedPoisoned, ZeroedFreed\}} never reaches \texttt{SealedActive} or \texttt{ShutdownClean}, while Python enforces \texttt{WorkerEpochGuard.\_lock $\to$ RequestSlot.\_lock} (\texttt{test\_18}, \texttt{test\_24}, \texttt{test\_30}).
+  \item \textbf{Guard 5 \& Probe E (Ed25519-Signed Ledger, Multi-Parent Verification \& Associative Merkle-DAG):} Every claim is signed with RFC~8032 Ed25519 (\texttt{test\_28}), \texttt{verify\_chain\_list} rejects forged multi-parent entries not chained from \texttt{VRK\_TRUST\_ROOT\_DIGEST} (\texttt{test\_26}), and \texttt{merge\_divergent\_ledgers} satisfies $(A\sqcup B)\sqcup C = A\sqcup(B\sqcup C)$ and $A\sqcup A = A$ (Theorem \texttt{merkle\_dag\_semilattice\_laws}, \texttt{test\_19}, \texttt{test\_20}, \texttt{test\_25}).
 \end{enumerate}
 
-\vspace{-6pt}
-\begin{thebibliography}{9}\footnotesize\setlength{\itemsep}{1pt}
+\vspace{-10pt}\renewcommand{\refname}{\normalsize References\vspace{-5pt}}
+\begin{thebibliography}{9}\footnotesize\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}
 \bibitem{vrk2026} P.~Upadhyay, \textit{IntentSeal Verifiable Research Kernel (VRK): Final Release v0.3.1}, Zenodo, 2026. \href{https://doi.org/10.5281/zenodo.23018459}{doi:10.5281/zenodo.23018459}.
 \bibitem{physics2026} P.~Upadhyay, \textit{Appendix A v1.5 --- Global Dissipative Completion and Soft-Wall Limit-Cycle Certification}, Zenodo, 2026. \href{https://doi.org/10.5281/zenodo.23534449}{doi:10.5281/zenodo.23534449}.
 \bibitem{existence2026} P.~Upadhyay, \textit{The Theory of Bounded Existence: A 4D Closed-Loop Dynamical Model of Self-Modeling Thresholds, Hopf Bifurcations, and $\Psi$-Memory-Sustained Oscillations (v1.0.0)}, Zenodo, 2026. \href{https://doi.org/10.5281/zenodo.23608244}{doi:10.5281/zenodo.23608244}.
 \bibitem{lrsc2026} P.~Upadhyay, \textit{LRSC Odd-Ring Spectral Rank Theorem (v1.2) \& Exact $M=99$ Certificate}, OSF, 2026. \href{https://doi.org/10.17605/OSF.IO/NM5BW}{doi:10.17605/OSF.IO/NM5BW}, \href{https://doi.org/10.17605/OSF.IO/JAK5X}{doi:10.17605/OSF.IO/JAK5X}.
+\bibitem{kim2021} H.~Kim, G.~Papamakarios, and A.~Mnih, \textit{The Lipschitz Constant of Self-Attention}, Proc.\ ICML, PMLR 139:5562--5571, 2021.
 \end{thebibliography}
 
 \end{document}

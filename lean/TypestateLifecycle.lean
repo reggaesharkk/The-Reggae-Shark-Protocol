@@ -2,12 +2,12 @@ import Mathlib.Tactic.Linarith
 import Mathlib.Data.Real.Basic
 
 /-!
-# Formal Request-Lifecycle Typestate, Worker-Epoch Isolation, Patankar-Euler Positivity,
-# Capacitive Decay Floor, Lipschitz Attention Bound, Monotonic Fence, and
-# Associative Merkle-DAG Join-Semilattice (`TypestateLifecycle.lean`)
+# Formal Request-Lifecycle Typestate Trace Invariants, Worker-Epoch Isolation,
+# Real Patankar-Euler Positivity, Pointwise Capacitive Decay Bound, Local Sensitivity Scaling,
+# Sequence Monotonicity, and Merkle-DAG Join-Semilattice (`TypestateLifecycle.lean`)
 
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.2.0 (Zenodo v4 Final Edition | Supersedes v3 DOI: 10.5281/zenodo.23624605)
+Version: 1.2.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v3 DOI: 10.5281/zenodo.23624605)
 License: MIT License
 
 ## Scope & Claim Boundary (`does_not_imply`)
@@ -15,27 +15,35 @@ This module machine-checks twelve formal properties of the Shark Protocol's math
 with zero `sorry` axioms and zero `nlinarith` heuristics:
 1. Five theorems (`oom_from_partial_init_is_poisoned`, `no_deref_after_partial_oom_abort`,
    `no_shutdown_uaf_on_poisoned_state`, `stale_epoch_read_rejected`, and
-   `typestate_and_epoch_security_certificate`) formalizing an application-level request-lifecycle
-   typestate automaton and worker-epoch guard that rule out partial-initialization payload
-   dereferencing and cross-epoch worker-slot reads within the modelled state machine.
-2. Three v1.1.2 red-team bridge theorems addressing continuous-to-discrete step invariance
-   (`patankar_euler_step_in_box`), slow self-modeling capacitive decay lower bounds
-   (`psi_decay_floor_bound`), and pairwise Merkle-DAG parent-pair join commutativity
+   `typestate_and_epoch_security_certificate`) formalizing a 6-state request-lifecycle typestate
+   automaton (where `ZeroedFreed` is strictly absorbing and `{AbortedPoisoned, ZeroedFreed}` forms
+   a closed terminal sink across all multi-step event traces `evs : List LifecycleEvent`) and a
+   worker-epoch guard (`slotEpoch = workerEpoch`).
+2. Three bridge theorems over `ℝ` and `Nat` addressing real-arithmetic Patankar-Euler step
+   box bounds (`patankar_euler_step_in_box`), the pointwise differential lower bound
+   `dΨ/dt ≥ -μ_Ψ * Ψ` (`psi_decay_floor_bound`), and pairwise Merkle-DAG parent-pair commutativity
    (`merkle_dag_merge_commutative`).
-3. Four v1.2.0 deep-audit theorems addressing IEEE-754 subnormal/FTZ strict interior positivity
-   (`patankar_strict_positivity_floor`), LRSC orthogonal residual Lipschitz attention error bounds
-   (`lrsc_attention_lipschitz_error_bound`), mutex-guarded fence sequence strict monotonicity
-   (`fence_seq_strict_monotonicity`), and N-way Merkle-DAG join-semilattice commutativity,
-   associativity, and idempotence (`merkle_dag_semilattice_laws`).
+3. Four supplementary theorems addressing real-arithmetic Patankar-Euler strict positivity
+   (`patankar_strict_positivity_floor`), linear threshold scaling for a bounded-domain local
+   attention sensitivity proxy (`lrsc_attention_lipschitz_error_bound`), sequence counter strict
+   monotonicity (`fence_seq_strict_monotonicity`), and N-way Merkle-DAG join-semilattice
+   commutativity, associativity, and idempotence (`merkle_dag_semilattice_laws`).
 
-**What is NOT claimed:** These theorems prove properties of the formal state-transition,
-algebraic, and semilattice models defined in this file. They do not verify a native C/PHP
-interpreter runtime, OS kernel ring-0 memory allocator, or hardware CPU cache-coherency protocol.
+**What is NOT claimed:**
+- Theorems 6 and 9 are proved over the mathematical real field `ℝ` (which has no subnormal numbers);
+  IEEE-754 float64 subnormal clamping at `FLOAT64_NORMAL_MIN` is enforced in Python runtime code.
+- Theorem 7 proves the pointwise derivative inequality `dΨ/dt ≥ -μ_Ψ * Ψ`; the integrated bound
+  `Ψ(t + Δt) ≥ Ψ(t) * exp(-μ_Ψ * Δt)` follows analytically via the classical Grönwall lemma.
+- Theorem 10 proves `0 ≤ L * η_⊥ ≤ L * τ_null` for a non-negative sensitivity constant `L`; because
+  dot-product softmax attention is not globally Lipschitz (Kim, Papamakarios & Mnih, ICML 2021), `L`
+  represents a local bounded-domain sensitivity proxy on unit-normalized signals `‖x̃‖_2 ≤ 1`.
+- Theorem 11 proves `seq < seq + 1`; Python `threading.RLock` acquisition hierarchy is enforced and
+  tested in the Python runtime (`shark_protocol/kernel.py`), not modeled in Lean.
 -/
 
 namespace SharkProtocol
 
-/-- Six-state request lifecycle automaton. -/
+/-- Six-state request lifecycle automaton with absorbing terminal state `ZeroedFreed`. -/
 inductive LifecycleState : Type
   | Uninit         : LifecycleState
   | PartialInit    : LifecycleState
@@ -54,7 +62,8 @@ inductive LifecycleEvent : Type
   | ZeroAndFree : LifecycleEvent
   deriving DecidableEq, Repr
 
-/-- Deterministic state transition function δ : LifecycleState → LifecycleEvent → LifecycleState. -/
+/-- Deterministic state transition function δ : LifecycleState → LifecycleEvent → LifecycleState.
+    `ZeroedFreed` is strictly absorbing under all events, and `{AbortedPoisoned, ZeroedFreed}` is closed. -/
 def stepLifecycle (s : LifecycleState) (ev : LifecycleEvent) : LifecycleState :=
   match s, ev with
   | LifecycleState.Uninit,          LifecycleEvent.BeginInit   => LifecycleState.PartialInit
@@ -64,7 +73,14 @@ def stepLifecycle (s : LifecycleState) (ev : LifecycleEvent) : LifecycleState :=
   | LifecycleState.SealedActive,    LifecycleEvent.NormalClose => LifecycleState.ShutdownClean
   | LifecycleState.ShutdownClean,   LifecycleEvent.ZeroAndFree => LifecycleState.ZeroedFreed
   | LifecycleState.AbortedPoisoned, LifecycleEvent.ZeroAndFree => LifecycleState.ZeroedFreed
+  | LifecycleState.ZeroedFreed,     _                          => LifecycleState.ZeroedFreed
   | _,                              _                          => LifecycleState.AbortedPoisoned
+
+/-- Multi-step trace execution fold over any finite list of lifecycle events. -/
+def runTrace (s : LifecycleState) (evs : List LifecycleEvent) : LifecycleState :=
+  match evs with
+  | []        => s
+  | ev :: rem => runTrace (stepLifecycle s ev) rem
 
 /-- Predicate: payload dereferencing is permitted only in `SealedActive`. -/
 def canDereferencePayload (s : LifecycleState) : Prop :=
@@ -85,22 +101,120 @@ structure WorkerSlot where
 def canAccessWorkerSlot (workerEpoch : Nat) (slot : WorkerSlot) : Prop :=
   slot.slotEpoch = workerEpoch ∧ slot.state = LifecycleState.SealedActive ∧ slot.isZeroed = false
 
-/-- Theorem 1: An out-of-memory abort during `PartialInit` transitions strictly to `AbortedPoisoned`. -/
-theorem oom_from_partial_init_is_poisoned :
-    stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort = LifecycleState.AbortedPoisoned := by
-  rfl
+/-- Theorem 1: An OOM abort during `PartialInit` transitions to `AbortedPoisoned`, and `ZeroedFreed`
+    is a strictly absorbing terminal state across all single events `ev` and all finite traces `evs`. -/
+theorem oom_from_partial_init_is_poisoned (ev : LifecycleEvent) (evs : List LifecycleEvent) :
+    stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort = LifecycleState.AbortedPoisoned ∧
+    stepLifecycle LifecycleState.ZeroedFreed ev = LifecycleState.ZeroedFreed ∧
+    runTrace LifecycleState.ZeroedFreed evs = LifecycleState.ZeroedFreed := by
+  have h_step : ∀ e : LifecycleEvent, stepLifecycle LifecycleState.ZeroedFreed e = LifecycleState.ZeroedFreed := by
+    intro e
+    cases e <;> rfl
+  have h_trace : ∀ l : List LifecycleEvent, runTrace LifecycleState.ZeroedFreed l = LifecycleState.ZeroedFreed := by
+    intro l
+    induction l with
+    | nil => rfl
+    | cons hd tl ih =>
+      change runTrace (stepLifecycle LifecycleState.ZeroedFreed hd) tl = LifecycleState.ZeroedFreed
+      rw [h_step hd]
+      exact ih
+  exact ⟨rfl, h_step ev, h_trace evs⟩
 
-/-- Theorem 2: Payload dereferencing is ruled out after a partial-initialization OOM abort. -/
-theorem no_deref_after_partial_oom_abort :
-    ¬ canDereferencePayload (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) := by
-  intro h
-  cases h
+/-- Theorem 2: Inductive trace safety — after a partial-initialization OOM abort, payload dereferencing
+    is ruled out not only at the immediate step but across all subsequent finite event traces `evs`. -/
+theorem no_deref_after_partial_oom_abort (evs : List LifecycleEvent) :
+    ¬ canDereferencePayload (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) ∧
+    ¬ canDereferencePayload (runTrace (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) evs) := by
+  have h_sink_step : ∀ (s : LifecycleState) (e : LifecycleEvent),
+      (s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) →
+      (stepLifecycle s e = LifecycleState.AbortedPoisoned ∨ stepLifecycle s e = LifecycleState.ZeroedFreed) := by
+    intro s e hs
+    cases hs with
+    | inl h_ab =>
+      rw [h_ab]
+      cases e with
+      | BeginInit   => exact Or.inl rfl
+      | SealSuccess => exact Or.inl rfl
+      | OOMAbort    => exact Or.inl rfl
+      | NormalClose => exact Or.inl rfl
+      | ZeroAndFree => exact Or.inr rfl
+    | inr h_zf =>
+      rw [h_zf]
+      cases e <;> exact Or.inr rfl
+  have h_sink_trace : ∀ (l : List LifecycleEvent) (s : LifecycleState),
+      (s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) →
+      (runTrace s l = LifecycleState.AbortedPoisoned ∨ runTrace s l = LifecycleState.ZeroedFreed) := by
+    intro l
+    induction l with
+    | nil =>
+      intro s hs
+      exact hs
+    | cons hd tl ih =>
+      intro s hs
+      change runTrace (stepLifecycle s hd) tl = LifecycleState.AbortedPoisoned ∨
+             runTrace (stepLifecycle s hd) tl = LifecycleState.ZeroedFreed
+      exact ih (stepLifecycle s hd) (h_sink_step s hd hs)
+  constructor
+  · intro h1
+    cases h1
+  · intro h_trace
+    unfold canDereferencePayload at h_trace
+    have h_end := h_sink_trace evs (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) (Or.inl rfl)
+    cases h_end with
+    | inl h_ab =>
+      rw [h_ab] at h_trace
+      cases h_trace
+    | inr h_zf =>
+      rw [h_zf] at h_trace
+      cases h_trace
 
-/-- Theorem 3: Clean destructor execution is ruled out on a poisoned partial-initialization state. -/
-theorem no_shutdown_uaf_on_poisoned_state :
-    ¬ canRunCleanDestructor (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) := by
-  intro h
-  cases h
+/-- Theorem 3: Inductive trace safety — after a partial-initialization OOM abort, clean destructor
+    execution is ruled out across the immediate state and all subsequent finite event traces `evs`. -/
+theorem no_shutdown_uaf_on_poisoned_state (evs : List LifecycleEvent) :
+    ¬ canRunCleanDestructor (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) ∧
+    ¬ canRunCleanDestructor (runTrace (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) evs) := by
+  have h_sink_step : ∀ (s : LifecycleState) (e : LifecycleEvent),
+      (s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) →
+      (stepLifecycle s e = LifecycleState.AbortedPoisoned ∨ stepLifecycle s e = LifecycleState.ZeroedFreed) := by
+    intro s e hs
+    cases hs with
+    | inl h_ab =>
+      rw [h_ab]
+      cases e with
+      | BeginInit   => exact Or.inl rfl
+      | SealSuccess => exact Or.inl rfl
+      | OOMAbort    => exact Or.inl rfl
+      | NormalClose => exact Or.inl rfl
+      | ZeroAndFree => exact Or.inr rfl
+    | inr h_zf =>
+      rw [h_zf]
+      cases e <;> exact Or.inr rfl
+  have h_sink_trace : ∀ (l : List LifecycleEvent) (s : LifecycleState),
+      (s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) →
+      (runTrace s l = LifecycleState.AbortedPoisoned ∨ runTrace s l = LifecycleState.ZeroedFreed) := by
+    intro l
+    induction l with
+    | nil =>
+      intro s hs
+      exact hs
+    | cons hd tl ih =>
+      intro s hs
+      change runTrace (stepLifecycle s hd) tl = LifecycleState.AbortedPoisoned ∨
+             runTrace (stepLifecycle s hd) tl = LifecycleState.ZeroedFreed
+      exact ih (stepLifecycle s hd) (h_sink_step s hd hs)
+  constructor
+  · intro h1
+    cases h1
+  · intro h_trace
+    unfold canRunCleanDestructor at h_trace
+    have h_end := h_sink_trace evs (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) (Or.inl rfl)
+    cases h_end with
+    | inl h_ab =>
+      rw [h_ab] at h_trace
+      cases h_trace
+    | inr h_zf =>
+      rw [h_zf] at h_trace
+      cases h_trace
 
 /-- Theorem 4: Any worker slot from a stale epoch (`slot.slotEpoch ≠ workerEpoch`) cannot be read. -/
 theorem stale_epoch_read_rejected (workerEpoch : Nat) (slot : WorkerSlot)
@@ -109,22 +223,24 @@ theorem stale_epoch_read_rejected (workerEpoch : Nat) (slot : WorkerSlot)
   intro h_access
   exact h_stale h_access.1
 
-/-- Theorem 5: Joint typestate and worker-epoch lifecycle certificate. -/
-theorem typestate_and_epoch_security_certificate (workerEpoch : Nat) (slot : WorkerSlot)
+/-- Theorem 5: Joint multi-step trace typestate, terminal absorbing `ZeroedFreed`, and worker-epoch certificate. -/
+theorem typestate_and_epoch_security_certificate
+    (workerEpoch : Nat) (slot : WorkerSlot) (ev : LifecycleEvent) (evs : List LifecycleEvent)
     (h_stale : slot.slotEpoch ≠ workerEpoch) :
     (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort = LifecycleState.AbortedPoisoned) ∧
-    (¬ canDereferencePayload (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort)) ∧
-    (¬ canRunCleanDestructor (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort)) ∧
+    (runTrace LifecycleState.ZeroedFreed evs = LifecycleState.ZeroedFreed) ∧
+    (¬ canDereferencePayload (runTrace (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) evs)) ∧
+    (¬ canRunCleanDestructor (runTrace (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) evs)) ∧
     (¬ canAccessWorkerSlot workerEpoch slot) := by
-  refine ⟨oom_from_partial_init_is_poisoned, no_deref_after_partial_oom_abort,
-          no_shutdown_uaf_on_poisoned_state, stale_epoch_read_rejected workerEpoch slot h_stale⟩
+  have h1 := oom_from_partial_init_is_poisoned ev evs
+  have h2 := no_deref_after_partial_oom_abort evs
+  have h3 := no_shutdown_uaf_on_poisoned_state evs
+  refine ⟨h1.1, h1.2.2, h2.2, h3.2, stale_epoch_read_rejected workerEpoch slot h_stale⟩
 
-/-- Theorem 6 (Red-Team Problem 1 — Discrete Patankar-Euler Box Invariance):
-    For any state `x ∈ [0, x_max]`, step size `dt ≥ 0`, non-negative production weight `P ≥ 0`,
-    and non-negative destruction weight `D ≥ 0`, the unconditionally positive Patankar-Euler
-    numerator `num = x + dt * P * x_max` and denominator `den = 1 + dt * (P + D)` satisfy
-    `0 ≤ num` and `num ≤ x_max * den`, guaranteeing `0 ≤ num / den ≤ x_max` for all `dt ≥ 0`
-    without truncation overshoot across the box faces. -/
+/-- Theorem 6 (Real-Arithmetic Patankar-Euler Box Invariance):
+    For any real state `x ∈ [0, x_max]`, step size `dt ≥ 0`, non-negative production weight `P ≥ 0`,
+    and non-negative destruction weight `D ≥ 0`, the Patankar-Euler numerator `num = x + dt * P * x_max`
+    and denominator `den = 1 + dt * (P + D)` satisfy `0 ≤ num` and `num ≤ x_max * den`. -/
 theorem patankar_euler_step_in_box
     (x x_max dt P D : ℝ)
     (hx_lo : 0 ≤ x) (hx_hi : x ≤ x_max)
@@ -140,10 +256,10 @@ theorem patankar_euler_step_in_box
   · linarith
   · linarith
 
-/-- Theorem 7 (Red-Team Problem 2 — Capacitive Self-Modeling Decay Floor):
-    Whenever `κ_meta ≥ 0`, `R_self ≥ 0`, and `Ψ ≤ 1`, the metacognitive velocity
-    `dΨ/dt = κ_meta * R_self * (1 - Ψ) - μ_Ψ * Ψ` is bounded below by `-μ_Ψ * Ψ`,
-    ruling out instantaneous downward jumps faster than the passive exponential decay rate `μ_Ψ`. -/
+/-- Theorem 7 (Pointwise Differential Lower Bound on Self-Modeling Readout Velocity):
+    Whenever `κ_meta ≥ 0`, `R_self ≥ 0`, and `Ψ ≤ 1`, the instantaneous derivative
+    `dΨ/dt = κ_meta * R_self * (1 - Ψ) - μ_Ψ * Ψ` is bounded below by `-μ_Ψ * Ψ`.
+    (Combined analytically with the classical Grönwall lemma, this yields `Ψ(t+Δt) ≥ Ψ(t)e^{-μ_Ψ Δt}`). -/
 theorem psi_decay_floor_bound
     (kappa_meta R_self Psi mu_Psi : ℝ)
     (h_kap : 0 ≤ kappa_meta) (h_R : 0 ≤ R_self) (h_psi_hi : Psi ≤ 1) :
@@ -157,7 +273,7 @@ theorem psi_decay_floor_bound
 def canonicalMergePair (hA hB : Nat) : Nat × Nat :=
   if hA ≤ hB then (hA, hB) else (hB, hA)
 
-/-- Theorem 8 (Red-Team Problem 5 — Pairwise Merkle-DAG Join Commutativity):
+/-- Theorem 8 (Pairwise Merkle-DAG Join Commutativity):
     Canonical parent-pair ordering is strictly commutative (`canonicalMergePair hA hB = canonicalMergePair hB hA`). -/
 theorem merkle_dag_merge_commutative (hA hB : Nat) :
     canonicalMergePair hA hB = canonicalMergePair hB hA := by
@@ -170,11 +286,10 @@ theorem merkle_dag_merge_commutative (hA hB : Nat) :
   · have h2 : hB ≤ hA := Nat.le_of_not_le h1
     simp [h1, h2]
 
-/-- Theorem 9 (Deep Probe A — Strict Patankar Positivity & Non-Zero Denormal Immunity):
-    Whenever `0 < x` (or `0 ≤ x` with strictly positive production `dt * P * x_max > 0`),
-    the linear Patankar-Euler numerator `x + dt * P * x_max` is strictly greater than `x`
-    and strictly positive (`> 0`), and the denominator `1 + dt * (P + D)` is at least `1`,
-    ensuring the update never collapses to zero or produces a zero denominator. -/
+/-- Theorem 9 (Real-Arithmetic Patankar Numerator & Denominator Strict Positivity):
+    Over `ℝ`, whenever `0 < x`, `0 ≤ x_max`, `0 ≤ dt`, `0 ≤ P`, and `0 ≤ D`, the Patankar-Euler
+    numerator satisfies `0 < x ≤ x + dt * P * x_max` and the denominator satisfies `1 ≤ 1 + dt * (P + D)`.
+    (IEEE-754 float64 subnormal clamping at `FLOAT64_NORMAL_MIN` is enforced separately in Python). -/
 theorem patankar_strict_positivity_floor
     (x x_max dt P D : ℝ)
     (hx_pos : 0 < x) (hx_max : 0 ≤ x_max)
@@ -185,11 +300,10 @@ theorem patankar_strict_positivity_floor
   have h_dtD : 0 ≤ dt * D := mul_nonneg hdt hD
   refine ⟨by linarith, by linarith, by linarith⟩
 
-/-- Theorem 10 (Deep Probe B & C — LRSC Orthogonal Residual Lipschitz Attention Error Bound):
-    For any downstream attention operator with Lipschitz constant `0 ≤ L_attn` and any input
-    whose orthogonal null-space energy ratio satisfies `0 ≤ eta_perp ≤ tau_null`, the induced
-    downstream attention perturbation `L_attn * eta_perp` is non-negative and bounded above
-    by `L_attn * tau_null`. -/
+/-- Theorem 10 (Linear Threshold Scaling for Local Bounded-Domain Sensitivity Proxy):
+    For any non-negative local sensitivity proxy constant `0 ≤ L_attn` and orthogonal residual
+    ratio `0 ≤ eta_perp ≤ tau_null`, the scaled perturbation proxy `L_attn * eta_perp` satisfies
+    `0 ≤ L_attn * eta_perp ≤ L_attn * tau_null`. -/
 theorem lrsc_attention_lipschitz_error_bound
     (L_attn eta_perp tau_null : ℝ)
     (hL : 0 ≤ L_attn) (heta_lo : 0 ≤ eta_perp) (heta_hi : eta_perp ≤ tau_null) :
@@ -204,9 +318,9 @@ theorem lrsc_attention_lipschitz_error_bound
 /-- Monotonic transition fence increment operator. -/
 def stepFenceSeq (seq : ℝ) : ℝ := seq + 1
 
-/-- Theorem 11 (Deep Probe D — Mutex-Sequenced Strict Fence Monotonicity):
-    Every lifecycle transition strictly advances a non-negative fence sequence counter
-    (`seq < stepFenceSeq seq` and `1 ≤ stepFenceSeq seq`), ruling out stale fence replay. -/
+/-- Theorem 11 (Fence Sequence Increment Monotonicity):
+    Every transition increment strictly advances a non-negative sequence number (`seq < stepFenceSeq seq`
+    and `1 ≤ stepFenceSeq seq`). -/
 theorem fence_seq_strict_monotonicity (seq : ℝ) (h_nonneg : 0 ≤ seq) :
     seq < stepFenceSeq seq ∧ 1 ≤ stepFenceSeq seq := by
   unfold stepFenceSeq
@@ -218,11 +332,10 @@ theorem fence_seq_strict_monotonicity (seq : ℝ) (h_nonneg : 0 ≤ seq) :
 def dagJoinSet (A B : Nat → Prop) (d : Nat) : Prop :=
   A d ∨ B d
 
-/-- Theorem 12 (Deep Probe E — N-Way Merkle-DAG Join-Semilattice Commutativity, Associativity & Idempotence):
-    Reconciling arbitrary multi-partition ledger branches via `dagJoinSet` forms a mathematical
-    join-semilattice satisfying Commutativity (`A ⊔ B = B ⊔ A`), Associativity
-    (`(A ⊔ B) ⊔ C = A ⊔ (B ⊔ C)`), and Idempotence (`A ⊔ A = A`), guaranteeing that N distributed
-    nodes merging divergent branches in any parenthesized order arrive at the exact same canonical claim set. -/
+/-- Theorem 12 (N-Way Merkle-DAG Join-Semilattice Commutativity, Associativity & Idempotence):
+    Reconciling multi-partition ledger claim sets via `dagJoinSet` forms a mathematical join-semilattice
+    satisfying Commutativity (`A ⊔ B = B ⊔ A`), Associativity (`(A ⊔ B) ⊔ C = A ⊔ (B ⊔ C)`), and
+    Idempotence (`A ⊔ A = A`). -/
 theorem merkle_dag_semilattice_laws (A B C : Nat → Prop) :
     (∀ d, dagJoinSet A B d ↔ dagJoinSet B A d) ∧
     (∀ d, dagJoinSet (dagJoinSet A B) C d ↔ dagJoinSet A (dagJoinSet B C) d) ∧
@@ -266,6 +379,10 @@ theorem merkle_dag_semilattice_laws (A B C : Nat → Prop) :
     · intro ha
       exact Or.inl ha
 
+#print axioms oom_from_partial_init_is_poisoned
+#print axioms no_deref_after_partial_oom_abort
+#print axioms no_shutdown_uaf_on_poisoned_state
+#print axioms stale_epoch_read_rejected
 #print axioms typestate_and_epoch_security_certificate
 #print axioms patankar_euler_step_in_box
 #print axioms psi_decay_floor_bound
