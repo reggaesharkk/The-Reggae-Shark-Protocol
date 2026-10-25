@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="shark_protocol",
-    version="1.3.0",
+    version="1.3.1",
     description="Formal Verification (41 Lean 4 Theorems), 200-Bit mpmath.iv Patankar-Euler & WP19 Duhamel Interval Certificates, Multi-Principal Subprocess Ed25519 Signer, and Multi-Cloud AI Gateway",
     author="Prince Upadhyay",
     author_email="starxshark@gmail.com",

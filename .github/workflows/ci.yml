@@ -1,71 +1,64 @@
-name: The Shark Protocol CI (Lean 4 + Python Matrix)
+name: Shark Protocol Verification & Lean 4 CI (v1.3.1)
 
 on:
   push:
-    branches: [ main ]
-    tags: [ 'v*' ]
+    branches: [ main, master ]
+    tags: [ "v*" ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
+
+permissions:
+  contents: read
 
 jobs:
-  lean4-formal-proofs:
-    name: Lean 4 Formal Verification (41 Theorems, 0 sorry, 0 custom axiom)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Verify zero sorry, custom axiom, or nlinarith tokens and verify #print axioms
-        run: |
-          python3 -c '
-          import pathlib, re
-          for name in ("ExistenceVerification.lean", "BoundaryVerification.lean", "TypestateLifecycle.lean"):
-              p = pathlib.Path("lean") / name
-              txt = p.read_text(encoding="utf-8")
-              clean = re.sub(r"/-.*?-/", " ", txt, flags=re.DOTALL)
-              clean = re.sub(r"--[^\\n]*", " ", clean)
-              assert re.search(r"\\bsorry\\b", clean) is None, f"sorry found in {name}"
-              assert re.search(r"\\baxiom\\b", clean) is None, f"custom axiom found in {name}"
-              assert re.search(r"\\bnlinarith\\b", clean) is None, f"nlinarith found in {name}"
-              thms = re.findall(r"\\btheorem\\s+([A-Za-z0-9_\x27]+)", clean)
-              if name == "TypestateLifecycle.lean":
-                  for t in thms:
-                      assert f"#print axioms {t}" in clean, f"Missing #print axioms for {t}"
-          print("All 3 Lean 4 modules (41 theorems) verified free of sorry, custom axiom, and nlinarith.")
-          '
-
-      - name: Install elan and build Lean 4 targets
-        uses: leanprover/lean-action@f807b338d95de7813c5c50d018f1c23c9b93b4ec # v1.2.0
-        with:
-          build-args: ExistenceVerification BoundaryVerification TypestateLifecycle
-
-  python-verification-matrix:
-    name: Python Gateway, 4D ODE, LRSC & Red-Team Suite (${{ matrix.python-version }})
+  python-verification-and-manifest:
+    name: Python 3.11 & 3.12 Verification + Manifest Gate
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12"]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Verify SHA-256 Manifest
-        run: sha256sum -c MANIFEST_SHA256.txt
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install package and dependencies
+      - name: Verify UTF-8 without BOM, LF line endings, and MANIFEST_SHA256.txt
+        run: |
+          sha256sum -c MANIFEST_SHA256.txt
+          python3 tools/check_lean_axioms.py --source-only
+
+      - name: Install pinned Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -e .
 
-      - name: Run Pytest Unit & Red-Team Suite (34 Tests)
-        run: pytest -v tests/
+      - name: Run full 38-test unit, red-team, differential & axiom suite
+        run: |
+          python -m unittest discover -s tests -v
 
-      - name: Run CLI Lifecycle & Red-Team Audit
-        run: python -m shark_protocol.cli --cli --audit-lifecycle
+      - name: Run CLI lifecycle and red-team self-audit
+        run: |
+          python -m shark_protocol.cli --cli --audit-lifecycle
+
+  lean4-formal-proofs-and-axioms:
+    name: Lean 4 (41 Theorems + AxiomsCheck Gate)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install elan and build 41 zero-sorry Lean 4 theorems
+        uses: leanprover/lean-action@d63700baa6fc2d53eb3aaf3b4dc1ef9a0a4e8f02
+        with:
+          auto-config: false
+          build: true
+
+      - name: Capture lake env lean lean/AxiomsCheck.lean and verify axiom subset
+        run: |
+          export PATH="$HOME/.elan/bin:$PATH"
+          lake env lean lean/AxiomsCheck.lean | tee /tmp/lean_axioms_output.txt
+          python3 tools/check_lean_axioms.py /tmp/lean_axioms_output.txt

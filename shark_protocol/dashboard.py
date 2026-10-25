@@ -1,7 +1,7 @@
 """
 Streamlit 4D ODE & VRK Telemetry Dashboard (`shark_protocol/dashboard.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.3.0 (Red-Team Tested Edition)
+Version: 1.3.1 (Red-Team Tested Edition)
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ def render_streamlit_dashboard() -> None:
     """Render interactive Streamlit telemetry view if `streamlit` is installed."""
     import streamlit as st  # type: ignore
 
-    st.set_page_config(page_title="The Shark Protocol v1.3.0 Telemetry", layout="wide")
-    st.title("The Reggae Shark Protocol (v1.3.0 — Red-Team Tested Edition)")
+    st.set_page_config(page_title="The Shark Protocol v1.3.1 Telemetry", layout="wide")
+    st.title("The Reggae Shark Protocol (v1.3.1 — Red-Team Tested Edition)")
     st.caption("Concept DOI: 10.5281/zenodo.23618032 · Lineage DOIs: 10.5281/zenodo.23635351 (v4), 10.5281/zenodo.23624605 (v3) · 10.5281/zenodo.23620074 (v2) · 10.5281/zenodo.23618033 (v1.0.3) | Code: MIT | Specification: CC BY 4.0")
 
     p0_val = st.slider("Basal Sensory Drive (P_0)", min_value=0.0, max_value=6.0, value=4.0, step=0.1)

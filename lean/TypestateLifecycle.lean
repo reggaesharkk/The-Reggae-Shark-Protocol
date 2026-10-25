@@ -3,11 +3,11 @@ import Mathlib.Data.Real.Basic
 
 /-!
 # Formal Request-Lifecycle Typestate Trace Invariants, Worker-Epoch Isolation,
-# Real Patankar-Euler Positivity, Pointwise Capacitive Decay Bound, Local Sensitivity Scaling,
+# Real Patankar-Euler Positivity, Pointwise Capacitive Decay Bound, Perturbation Budget Scaling,
 # Sequence Monotonicity, and Merkle-DAG Join-Semilattice (`TypestateLifecycle.lean`)
 
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.3.0 (Cross-Program 3-Track Upgrade Edition | Concept DOI: 10.5281/zenodo.23618032 | v4 DOI: 10.5281/zenodo.23635351 | v3 DOI: 10.5281/zenodo.23624605)
+Version: 1.3.1 (Reviewer-Audited Edition | Concept DOI: 10.5281/zenodo.23618032 | Prior v4 DOI: 10.5281/zenodo.23635351)
 License: MIT License
 
 ## Scope & Claim Boundary (`does_not_imply`)
@@ -24,21 +24,27 @@ with zero `sorry` axioms and zero `nlinarith` heuristics:
    `dΨ/dt ≥ -μ_Ψ * Ψ` (`psi_decay_floor_bound`), and pairwise Merkle-DAG parent-pair commutativity
    (`merkle_dag_merge_commutative`).
 3. Four supplementary theorems addressing real-arithmetic Patankar-Euler strict positivity
-   (`patankar_strict_positivity_floor`), linear threshold scaling for a bounded-domain local
-   attention sensitivity proxy (`lrsc_attention_lipschitz_error_bound`), sequence counter strict
-   monotonicity (`fence_seq_strict_monotonicity`), and N-way Merkle-DAG join-semilattice
-   commutativity, associativity, and idempotence (`merkle_dag_semilattice_laws`).
+   (`patankar_strict_positivity_floor`), linear perturbation budget scaling
+   (`perturbation_budget_scaling`), sequence counter strict monotonicity
+   (`fence_seq_strict_monotonicity`), and N-way Merkle-DAG join-semilattice commutativity,
+   associativity, and idempotence (`merkle_dag_semilattice_laws`).
+4. Three cross-program theorems/lemmas: outward-rounded interval containment
+   (`patankar_interval_rounding_in_box`), a definitional projection lemma
+   (`projection_independent_of_secret`), and two-step piecewise Duhamel contraction vs. single-horizon
+   growth (`duhamel_piecewise_contraction_bound`).
 
 **What is NOT claimed:**
-- Theorems 6 and 9 are proved over the mathematical real field `ℝ` (which has no subnormal numbers);
-  IEEE-754 float64 subnormal clamping at `FLOAT64_NORMAL_MIN` is enforced in Python runtime code.
+- Theorems 6, 9, and 13 are proved over the mathematical real field `ℝ` (which has no subnormal numbers);
+  IEEE-754 float64 subnormal clamping at `FLOAT64_NORMAL_MIN` and 200-bit `mpmath.iv` interval checks are
+  enforced in Python runtime code.
 - Theorem 7 proves the pointwise derivative inequality `dΨ/dt ≥ -μ_Ψ * Ψ`; the integrated bound
   `Ψ(t + Δt) ≥ Ψ(t) * exp(-μ_Ψ * Δt)` follows analytically via the classical Grönwall lemma.
-- Theorem 10 proves `0 ≤ L * η_⊥ ≤ L * τ_null` for a non-negative sensitivity constant `L`; because
-  dot-product softmax attention is not globally Lipschitz (Kim, Papamakarios & Mnih, ICML 2021), `L`
-  represents a local bounded-domain sensitivity proxy on unit-normalized signals `‖x̃‖_2 ≤ 1`.
-- Theorem 11 proves `seq < seq + 1`; Python `threading.RLock` acquisition hierarchy is enforced and
-  tested in the Python runtime (`shark_protocol/kernel.py`), not modeled in Lean.
+- Theorem 10 (`perturbation_budget_scaling`) proves the linear scaling inequality `0 ≤ L * η_⊥ ≤ L * τ_null`
+  for an assumed non-negative sensitivity constant `L ≥ 0`; because dot-product softmax attention is not
+  globally Lipschitz (Kim, Papamakarios & Mnih, ICML 2021), `L` is an explicit assumed local parameter.
+- Theorem 14 (`projection_independent_of_secret`) is a definitional projection lemma showing that a pure
+  function of `PublicLedgerState` does not depend on a separate `SignerPrincipalState` argument; OS process
+  isolation rests on the runtime `subprocess.Popen` architecture and regression tests, not this lemma.
 -/
 
 namespace SharkProtocol
@@ -75,6 +81,41 @@ def stepLifecycle (s : LifecycleState) (ev : LifecycleEvent) : LifecycleState :=
   | LifecycleState.AbortedPoisoned, LifecycleEvent.ZeroAndFree => LifecycleState.ZeroedFreed
   | LifecycleState.ZeroedFreed,     _                          => LifecycleState.ZeroedFreed
   | _,                              _                          => LifecycleState.AbortedPoisoned
+
+/-- Canonical string name of a `LifecycleState` for JSON transition-table export (`#eval`). -/
+def stateToString : LifecycleState → String
+  | LifecycleState.Uninit          => "UNINIT"
+  | LifecycleState.PartialInit     => "PARTIAL_INIT"
+  | LifecycleState.SealedActive    => "SEALED_ACTIVE"
+  | LifecycleState.ShutdownClean   => "SHUTDOWN_CLEAN"
+  | LifecycleState.AbortedPoisoned => "ABORTED_POISONED"
+  | LifecycleState.ZeroedFreed     => "ZEROED_FREED"
+
+/-- Canonical string name of a `LifecycleEvent` for JSON transition-table export (`#eval`). -/
+def eventToString : LifecycleEvent → String
+  | LifecycleEvent.BeginInit   => "BEGIN_INIT"
+  | LifecycleEvent.SealSuccess => "SEAL_SUCCESS"
+  | LifecycleEvent.OOMAbort    => "OOM_ABORT"
+  | LifecycleEvent.NormalClose => "NORMAL_CLOSE"
+  | LifecycleEvent.ZeroAndFree => "ZERO_AND_FREE"
+
+def allStates : List LifecycleState :=
+  [LifecycleState.Uninit, LifecycleState.PartialInit, LifecycleState.SealedActive,
+   LifecycleState.ShutdownClean, LifecycleState.AbortedPoisoned, LifecycleState.ZeroedFreed]
+
+def allEvents : List LifecycleEvent :=
+  [LifecycleEvent.BeginInit, LifecycleEvent.SealSuccess, LifecycleEvent.OOMAbort,
+   LifecycleEvent.NormalClose, LifecycleEvent.ZeroAndFree]
+
+/-- Export the complete 6x5 Lean transition table to a JSON string via `#eval`. -/
+def dumpTransitionTableJson : String :=
+  let rows := allStates.map (fun s =>
+    let pairs := allEvents.map (fun ev =>
+      "\"" ++ eventToString ev ++ "\":\"" ++ stateToString (stepLifecycle s ev) ++ "\"")
+    "\"" ++ stateToString s ++ "\":{" ++ String.intercalate "," pairs ++ "}")
+  "{" ++ String.intercalate "," rows ++ "}"
+
+#eval dumpTransitionTableJson
 
 /-- Multi-step trace execution fold over any finite list of lifecycle events. -/
 def runTrace (s : LifecycleState) (evs : List LifecycleEvent) : LifecycleState :=
@@ -300,11 +341,11 @@ theorem patankar_strict_positivity_floor
   have h_dtD : 0 ≤ dt * D := mul_nonneg hdt hD
   refine ⟨by linarith, by linarith, by linarith⟩
 
-/-- Theorem 10 (Linear Threshold Scaling for Local Bounded-Domain Sensitivity Proxy):
-    For any non-negative local sensitivity proxy constant `0 ≤ L_attn` and orthogonal residual
-    ratio `0 ≤ eta_perp ≤ tau_null`, the scaled perturbation proxy `L_attn * eta_perp` satisfies
+/-- Theorem 10 (Linear Perturbation Budget Scaling for Assumed Sensitivity Parameter `L_attn`):
+    For any assumed non-negative local sensitivity factor `0 ≤ L_attn` and orthogonal residual
+    ratio `0 ≤ eta_perp ≤ tau_null`, the scaled perturbation budget `L_attn * eta_perp` satisfies
     `0 ≤ L_attn * eta_perp ≤ L_attn * tau_null`. -/
-theorem lrsc_attention_lipschitz_error_bound
+theorem perturbation_budget_scaling
     (L_attn eta_perp tau_null : ℝ)
     (hL : 0 ≤ L_attn) (heta_lo : 0 ≤ eta_perp) (heta_hi : eta_perp ≤ tau_null) :
     0 ≤ L_attn * eta_perp ∧ L_attn * eta_perp ≤ L_attn * tau_null := by
@@ -379,11 +420,11 @@ theorem merkle_dag_semilattice_laws (A B C : Nat → Prop) :
     · intro ha
       exact Or.inl ha
 
-/-- Theorem 13 (Track A — Outward-Rounded Interval Containment & Strict Interior Margin):
-    For any real step value `x_exact` satisfying strict interior bounds `δ_ulp ≤ x_exact` and
+/-- Theorem 13 (Track A — Outward-Rounded Interval Containment & Interior Margin):
+    For any real step value `x_exact` satisfying interior bounds `δ_ulp ≤ x_exact` and
     `x_exact + δ_ulp ≤ x_max` with rounding radius `0 ≤ δ_ulp`, the outward-rounded interval
-    `[x_exact - δ_ulp, x_exact + δ_ulp]` lies strictly inside `[0, x_max]` (`0 ≤ x_exact - δ_ulp`
-    and `x_exact + δ_ulp ≤ x_max`) with width `2 * δ_ulp ≥ 0`. -/
+    `[x_exact - δ_ulp, x_exact + δ_ulp]` lies inside `[0, x_max]` (`0 ≤ x_exact - δ_ulp`
+    and `x_exact + δ_ulp ≤ x_max`). -/
 theorem patankar_interval_rounding_in_box
     (x_exact x_max delta_ulp : ℝ)
     (h_delta : 0 ≤ delta_ulp)
@@ -394,8 +435,7 @@ theorem patankar_interval_rounding_in_box
     x_exact + delta_ulp ≤ x_max := by
   refine ⟨by linarith, by linarith, by linarith⟩
 
-/-- Two-principal state model separating the Worker/Gateway address space (`PublicLedgerState`)
-    from the isolated Ed25519 Authority Signer subprocess (`SignerPrincipalState`). -/
+/-- Record structures for definitional projection lemma (`projection_independent_of_secret`). -/
 structure PublicLedgerState where
   pubkeyDigest : Nat
   headDigest   : Nat
@@ -406,41 +446,40 @@ structure SignerPrincipalState where
   pubkeyDigest : Nat
   deriving DecidableEq, Repr
 
-/-- A worker principal operation that can only read/transform `PublicLedgerState`. -/
+/-- Projection function that depends only on `PublicLedgerState`. -/
 def applyWorkerProjection (f : PublicLedgerState → Nat) (pub : PublicLedgerState) (_sec : SignerPrincipalState) : Nat :=
   f pub
 
-/-- Theorem 14 (Track B — Multi-Principal Address-Space Non-Interference):
-    Any worker-principal computation `applyWorkerProjection f` depends exclusively on
-    `PublicLedgerState` and is invariant under arbitrary changes to the private key seed
-    (`s1.secretSeed ≠ s2.secretSeed`) inside `SignerPrincipalState`. -/
-theorem principal_key_isolation_noninterference
+/-- Theorem 14 (Definitional Projection Lemma — `projection_independent_of_secret`):
+    Definitional lemma stating that `applyWorkerProjection f pub` ignores its `_sec` argument.
+    Note: This is a definitional projection lemma, not a formal proof of OS-level process isolation;
+    process isolation of the Ed25519 signing seed is enforced at runtime by `IsolatedSignerSubprocess`
+    (`subprocess.Popen`) and verified by regression tests (`test_32`). -/
+theorem projection_independent_of_secret
     (f : PublicLedgerState → Nat)
     (pub : PublicLedgerState)
     (s1 s2 : SignerPrincipalState) :
     applyWorkerProjection f pub s1 = applyWorkerProjection f pub s2 := by
   rfl
 
-/-- Theorem 15 (Track C — Piecewise Dissipative Duhamel Contraction vs. Whole-Path Grönwall):
-    For a two-segment error evolution `e1 ≤ α * e0 + d1` and `e2 ≤ α * e1 + d2` where the
-    dissipative contraction factor `0 ≤ α` is bounded by the naive whole-path Grönwall growth
-    factor `α ≤ G` (with `0 ≤ e0`, `0 ≤ d1`, `0 ≤ d2`), the piecewise Duhamel error bound
-    `α * (α * e0 + d1) + d2` is bounded above by the unsplit Grönwall bound `G * (G * e0 + d1) + d2`,
-    and strictly smaller whenever `α < G` and `0 < d1`. -/
+/-- Theorem 15 (Two-Step Piecewise Dissipative Duhamel Recurrence vs. Single-Rate Growth):
+    For a two-step recurrence `e1 = α * e0 + d1` and `e2 = α * e1 + d2` where `0 ≤ α ≤ G`
+    and `0 ≤ e0, d1, d2`, the two-step bound `α * (α * e0 + d1) + d2` is bounded above by
+    `G * (G * e0 + d1) + d2`, and is strictly smaller (`α * (α * e0 + d1) + d2 < G * (G * e0 + d1) + d2`)
+    whenever `α < G` and `0 < d1`. -/
 theorem duhamel_piecewise_contraction_bound
     (alpha G e0 d1 d2 : ℝ)
     (h_alpha : 0 ≤ alpha) (h_le : alpha ≤ G)
     (he0 : 0 ≤ e0) (hd1 : 0 ≤ d1) (hd2 : 0 ≤ d2) :
     alpha * (alpha * e0 + d1) + d2 ≤ G * (G * e0 + d1) + d2 ∧
-    (alpha < G → 0 < d1 → alpha * d1 + d2 < G * d1 + d2) := by
+    (alpha < G → 0 < d1 → alpha * (alpha * e0 + d1) + d2 < G * (G * e0 + d1) + d2) := by
   have h_G : 0 ≤ G := by linarith
   have h_diff : 0 ≤ G - alpha := by linarith
   have h_ae0_le_Ge0 : alpha * e0 ≤ G * e0 := by
     have h1 : 0 ≤ (G - alpha) * e0 := mul_nonneg h_diff he0
     linarith
-  have h_inner_nonneg : 0 ≤ alpha * e0 + d1 := by
-    have h2 : 0 ≤ alpha * e0 := mul_nonneg h_alpha he0
-    linarith
+  have h_ae0_nonneg : 0 ≤ alpha * e0 := mul_nonneg h_alpha he0
+  have h_inner_nonneg : 0 ≤ alpha * e0 + d1 := by linarith
   have h_step1 : alpha * (alpha * e0 + d1) ≤ G * (alpha * e0 + d1) := by
     have h3 : 0 ≤ (G - alpha) * (alpha * e0 + d1) := mul_nonneg h_diff h_inner_nonneg
     linarith
@@ -452,7 +491,8 @@ theorem duhamel_piecewise_contraction_bound
   · linarith
   · intro h_strict hd1_pos
     have h_strict_diff : 0 < G - alpha := by linarith
-    have h_prod_pos : 0 < (G - alpha) * d1 := mul_pos h_strict_diff hd1_pos
+    have h_inner_pos : 0 < alpha * e0 + d1 := by linarith
+    have h_step1_strict : 0 < (G - alpha) * (alpha * e0 + d1) := mul_pos h_strict_diff h_inner_pos
     linarith
 
 #print axioms oom_from_partial_init_is_poisoned
@@ -464,11 +504,11 @@ theorem duhamel_piecewise_contraction_bound
 #print axioms psi_decay_floor_bound
 #print axioms merkle_dag_merge_commutative
 #print axioms patankar_strict_positivity_floor
-#print axioms lrsc_attention_lipschitz_error_bound
+#print axioms perturbation_budget_scaling
 #print axioms fence_seq_strict_monotonicity
 #print axioms merkle_dag_semilattice_laws
 #print axioms patankar_interval_rounding_in_box
-#print axioms principal_key_isolation_noninterference
+#print axioms projection_independent_of_secret
 #print axioms duhamel_piecewise_contraction_bound
 
 end SharkProtocol

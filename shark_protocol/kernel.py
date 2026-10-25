@@ -1,7 +1,7 @@
 """
 Layer 1, Layer 1B, Layer 2, and Layer 3 Core Verification Kernel (`shark_protocol/kernel.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.3.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v4 DOI: 10.5281/zenodo.23635351 | v3 DOI: 10.5281/zenodo.23624605)
+Version: 1.3.1 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v4 DOI: 10.5281/zenodo.23635351 | v3 DOI: 10.5281/zenodo.23624605)
 
 What Is and Is Not Modelled (Epistemic Firewall):
 - Layer 1 (`SharkProtocolEngine` + `Ed25519AuthoritySigner`): Enforces the `intentseal-vrk-claim-v2`
@@ -85,170 +85,98 @@ def _is_hex64(val: Any) -> bool:
     return all(c in "0123456789abcdef" for c in val)
 
 
-# Pure-Python RFC 8032 Ed25519 implementation (fallback when `cryptography` is absent;
-# produces byte-identical 32-byte public keys and 64-byte signatures to OpenSSL / cryptography).
-_ED_P = 2**255 - 19
-_ED_L = 2**252 + 27742317777372353535851937790883648493
-_ED_D = (-121665 * pow(121666, _ED_P - 2, _ED_P)) % _ED_P
-_ED_I = pow(2, (_ED_P - 1) // 4, _ED_P)
-_ED_BY = (4 * pow(5, _ED_P - 2, _ED_P)) % _ED_P
-_ED_BX = 15112221349535400772501151409588531511454012693041857206046113283949847762202
-_ED_B = (_ED_BX % _ED_P, _ED_BY % _ED_P, 1, (_ED_BX * _ED_BY) % _ED_P)
-
-
-def _ed_add(P: Tuple[int, int, int, int], Q: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
-    x1, y1, z1, t1 = P
-    x2, y2, z2, t2 = Q
-    a = ((y1 - x1) * (y2 - x2)) % _ED_P
-    b = ((y1 + x1) * (y2 + x2)) % _ED_P
-    c = (t1 * 2 * _ED_D * t2) % _ED_P
-    d = (z1 * 2 * z2) % _ED_P
-    e = (b - a) % _ED_P
-    f = (d - c) % _ED_P
-    g = (d + c) % _ED_P
-    h = (b + a) % _ED_P
-    return ((e * f) % _ED_P, (g * h) % _ED_P, (f * g) % _ED_P, (e * h) % _ED_P)
-
-
-def _ed_scalarmult(P: Tuple[int, int, int, int], e: int) -> Tuple[int, int, int, int]:
-    Q = (0, 1, 1, 0)
-    cur = P
-    while e > 0:
-        if e & 1:
-            Q = _ed_add(Q, cur)
-        cur = _ed_add(cur, cur)
-        e >>= 1
-    return Q
-
-
-def _ed_encode_point(P: Tuple[int, int, int, int]) -> bytes:
-    x, y, z, _ = P
-    zi = pow(z, _ED_P - 2, _ED_P)
-    xp = (x * zi) % _ED_P
-    yp = (y * zi) % _ED_P
-    return int(yp | ((xp & 1) << 255)).to_bytes(32, "little")
-
-
-def _ed_decode_point(b: bytes) -> Optional[Tuple[int, int, int, int]]:
-    if len(b) != 32:
-        return None
-    unpacked = int.from_bytes(b, "little")
-    sign = (unpacked >> 255) & 1
-    y = unpacked & ((1 << 255) - 1)
-    if y >= _ED_P:
-        return None
-    y2 = (y * y) % _ED_P
-    u = (y2 - 1) % _ED_P
-    v = (_ED_D * y2 + 1) % _ED_P
-    v3 = (v * v * v) % _ED_P
-    v7 = (v3 * v3 * v) % _ED_P
-    x = (u * v3 * pow(u * v7, (_ED_P - 5) // 8, _ED_P)) % _ED_P
-    vxx = (v * x * x) % _ED_P
-    if vxx == u:
-        pass
-    elif vxx == (-u) % _ED_P:
-        x = (x * _ED_I) % _ED_P
-    else:
-        return None
-    if x == 0 and sign == 1:
-        return None
-    if (x & 1) != sign:
-        x = _ED_P - x
-    return (x, y, 1, (x * y) % _ED_P)
+# Retired v1.2.0/v1.3.0 public-seed SHA-256 and public key (explicitly revoked and blocked in v1.3.1)
+RETIRED_V120_SEED_SHA256 = "914f28eabb2b93fb15bf6ad071120c21e8dd5a8a5e4825f053a1962b101901ec"
+RETIRED_V120_PUBKEY_HEX = "e3ad81062fa39a869b798e3ab3a7195316dbe7de0e5e0da22a7ff4194065b74c"
+WP19_SEGMENTS_EXPECTED_SHA256 = "a78a67c8ea8f4950dcf8bad6e76ebb7fe6362742ac1dbc63881cc14311d99319"
 
 
 class Ed25519AuthoritySigner:
     """
-    RFC 8032 Ed25519 digital signature authority for VRK v0.3.1 ledger records (Audit Item 3 Fix).
-    Uses `cryptography.hazmat.primitives.asymmetric.ed25519` when available, with a byte-for-byte
-    identical pure-Python RFC 8032 fallback when running in minimal environments.
+    RFC 8032 Ed25519 digital signature authority for VRK v0.3.1 ledger records (Task A & B Remediation).
+    - Requires the `cryptography` C-extension backend (`Ed25519PrivateKey` / `Ed25519PublicKey`) and
+      fails closed if unavailable (no non-constant-time pure-Python fallback).
+    - Requires an explicit 32-byte `seed` or `SHARK_ED25519_SEED_HEX` environment variable; refuses
+      to start (`RuntimeError`) if no signing key is configured.
+    - Rejects the retired v1.2.0 public seed (`RETIRED_V120_SEED_SHA256`).
     """
-
-    DEFAULT_DETERMINISTIC_SEED = hashlib.sha256(
-        b"shark_protocol_v1_2_0_default_ed25519_seed:" + VRK_TRUST_ROOT_DIGEST.encode("ascii")
-    ).digest()
 
     def __init__(self, seed: Optional[bytes] = None) -> None:
         if seed is None:
             env_hex = os.environ.get("SHARK_ED25519_SEED_HEX", "").strip()
-            if env_hex:
+            if not env_hex:
+                raise RuntimeError(
+                    "No signing key configured: set SHARK_ED25519_SEED_HEX (64 hex chars) or pass an explicit 32-byte seed; refusing to start."
+                )
+            try:
                 seed = bytes.fromhex(env_hex)
-            else:
-                seed = self.DEFAULT_DETERMINISTIC_SEED
-        if len(seed) != 32:
+            except ValueError as exc:
+                raise ValueError("SHARK_ED25519_SEED_HEX must be 64 hexadecimal characters.") from exc
+        if not isinstance(seed, (bytes, bytearray)) or len(seed) != 32:
             raise ValueError("Ed25519 seed must be exactly 32 bytes.")
-        self._seed = bytes(seed)
+        raw_seed = bytes(seed)
+        if hashlib.sha256(raw_seed).hexdigest() == RETIRED_V120_SEED_SHA256:
+            raise ValueError("Refusing to initialize Ed25519AuthoritySigner with retired v1.2.0 public seed.")
         try:
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
             from cryptography.hazmat.primitives import serialization
-            self._priv_obj = Ed25519PrivateKey.from_private_bytes(self._seed)
-            self._pub_bytes = self._priv_obj.public_key().public_bytes(
-                encoding=serialization.Encoding.Raw,
-                format=serialization.PublicFormat.Raw,
-            )
-            self._use_c_backend = True
-        except Exception:
-            h = hashlib.sha512(self._seed).digest()
-            a = int.from_bytes(h[:32], "little")
-            a &= (1 << 254) - 8
-            a |= 1 << 254
-            self._a = a
-            self._prefix = h[32:]
-            self._pub_bytes = _ed_encode_point(_ed_scalarmult(_ED_B, a))
-            self._use_c_backend = False
+        except ImportError as exc:
+            raise RuntimeError(
+                "The 'cryptography' package is required for constant-time Ed25519 signing; refusing to start."
+            ) from exc
+        self._seed = raw_seed
+        self._priv_obj = Ed25519PrivateKey.from_private_bytes(self._seed)
+        self._pub_bytes = self._priv_obj.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
 
     @property
     def public_key_hex(self) -> str:
         return self._pub_bytes.hex()
 
     def sign_digest_hex(self, digest_hex: str) -> str:
+        if not _is_hex64(digest_hex):
+            raise ValueError("sign_digest_hex requires a 64-character lowercase hex SHA-256 digest.")
         msg = digest_hex.encode("ascii")
-        if self._use_c_backend:
-            return self._priv_obj.sign(msg).hex()
-        r = int.from_bytes(hashlib.sha512(self._prefix + msg).digest(), "little") % _ED_L
-        R = _ed_encode_point(_ed_scalarmult(_ED_B, r))
-        k = int.from_bytes(hashlib.sha512(R + self._pub_bytes + msg).digest(), "little") % _ED_L
-        S = ((r + k * self._a) % _ED_L).to_bytes(32, "little")
-        return (R + S).hex()
+        return self._priv_obj.sign(msg).hex()
 
     @staticmethod
     def verify_digest_signature(pubkey_hex: str, digest_hex: str, signature_hex: str) -> bool:
         try:
+            if not isinstance(pubkey_hex, str) or pubkey_hex.lower() == RETIRED_V120_PUBKEY_HEX:
+                return False
             pub_bytes = bytes.fromhex(pubkey_hex)
             sig_bytes = bytes.fromhex(signature_hex)
-            if len(pub_bytes) != 32 or len(sig_bytes) != 64:
+            if len(pub_bytes) != 32 or len(sig_bytes) != 64 or not _is_hex64(digest_hex):
                 return False
-            msg = digest_hex.encode("ascii")
-            try:
-                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-                pub = Ed25519PublicKey.from_public_bytes(pub_bytes)
-                pub.verify(sig_bytes, msg)
-                return True
-            except ImportError:
-                A = _ed_decode_point(pub_bytes)
-                R = _ed_decode_point(sig_bytes[:32])
-                S = int.from_bytes(sig_bytes[32:], "little")
-                if A is None or R is None or S >= _ED_L:
-                    return False
-                k = int.from_bytes(hashlib.sha512(sig_bytes[:32] + pub_bytes + msg).digest(), "little") % _ED_L
-                lhs = _ed_scalarmult(_ED_B, S)
-                rhs = _ed_add(R, _ed_scalarmult(A, k))
-                return _ed_encode_point(lhs) == _ed_encode_point(rhs)
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            pub = Ed25519PublicKey.from_public_bytes(pub_bytes)
+            pub.verify(sig_bytes, digest_hex.encode("ascii"))
+            return True
+        except ImportError as exc:
+            raise RuntimeError(
+                "The 'cryptography' package is required for Ed25519 signature verification."
+            ) from exc
         except Exception:
             return False
 
 
-
-
 _SIGNER_DAEMON_CODE = r"""
-import hashlib, json, os, sys
+import json, os, sys
 from shark_protocol.kernel import Ed25519AuthoritySigner
 
-seed_hex = os.environ.get("SHARK_ISOLATED_SIGNER_SEED_HEX", "").strip()
-seed = bytes.fromhex(seed_hex) if seed_hex else None
+ephemeral_flag = os.environ.pop("SHARK_ISOLATED_SIGNER_EPHEMERAL", "").strip()
+seed_hex = os.environ.pop("SHARK_ISOLATED_SIGNER_SEED_HEX", "").strip()
+if ephemeral_flag == "1" and not seed_hex:
+    seed = os.urandom(32)
+elif seed_hex:
+    seed = bytes.fromhex(seed_hex)
+else:
+    raise RuntimeError("IsolatedSignerSubprocess daemon requires seed or ephemeral flag.")
+
 signer = Ed25519AuthoritySigner(seed=seed)
-# Immediately scrub seed env var inside daemon subprocess
-os.environ.pop("SHARK_ISOLATED_SIGNER_SEED_HEX", None)
+del seed
 
 for raw_line in sys.stdin:
     line = raw_line.strip()
@@ -279,22 +207,40 @@ for raw_line in sys.stdin:
 
 class IsolatedSignerSubprocess:
     """
-    Track B Upgrade (Multi-Principal OS Process Isolation for Ed25519 Authority Signing):
-    Spawns a separate OS child process (`subprocess.Popen`) that holds the Ed25519 private seed
-    in a distinct OS process address space. The parent gateway/worker process scrubs its seed
-    reference (`self._seed = None`) and communicates solely over a narrow JSON-RPC pipe
-    (`PUBKEY`, `SIGN`, `SHUTDOWN`), so an in-process memory read of the worker principal
-    (`vars(self)`) cannot extract the private key (`lean/TypestateLifecycle.lean`:
-    `principal_key_isolation_noninterference`).
+    Track B (Multi-Principal OS Process Isolation for Ed25519 Signing):
+    Spawns a separate OS child process (`subprocess.Popen`) that either generates its own
+    32-byte key in-child (`generate_ephemeral=True`) or loads a configured seed in-child,
+    returning ONLY the 32-byte public key (`PUBKEY`) to the parent process.
+    If `seed is None`, `generate_ephemeral is False`, and `SHARK_ED25519_SEED_HEX` is unset,
+    raises `RuntimeError` and refuses to start.
     """
 
-    def __init__(self, seed: Optional[bytes] = None) -> None:
-        raw_seed = seed if seed is not None else Ed25519AuthoritySigner.DEFAULT_DETERMINISTIC_SEED
-        if len(raw_seed) != 32:
-            raise ValueError("Ed25519 seed must be 32 bytes")
+    def __init__(self, seed: Optional[bytes] = None, *, generate_ephemeral: bool = False) -> None:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(REPO_ROOT)
-        env["SHARK_ISOLATED_SIGNER_SEED_HEX"] = raw_seed.hex()
+        env.pop("SHARK_ED25519_SEED_HEX", None)
+        if seed is not None:
+            if not isinstance(seed, (bytes, bytearray)) or len(seed) != 32:
+                raise ValueError("Ed25519 seed must be exactly 32 bytes.")
+            if hashlib.sha256(bytes(seed)).hexdigest() == RETIRED_V120_SEED_SHA256:
+                raise ValueError("Refusing to initialize IsolatedSignerSubprocess with retired v1.2.0 seed.")
+            env["SHARK_ISOLATED_SIGNER_SEED_HEX"] = bytes(seed).hex()
+        elif generate_ephemeral:
+            env["SHARK_ISOLATED_SIGNER_EPHEMERAL"] = "1"
+        else:
+            env_hex = os.environ.get("SHARK_ED25519_SEED_HEX", "").strip()
+            if not env_hex:
+                raise RuntimeError(
+                    "No signing key configured for IsolatedSignerSubprocess: set SHARK_ED25519_SEED_HEX, "
+                    "pass an explicit seed, or set generate_ephemeral=True."
+                )
+            raw_env = bytes.fromhex(env_hex)
+            if len(raw_env) != 32:
+                raise ValueError("SHARK_ED25519_SEED_HEX must be 32 bytes (64 hex chars).")
+            if hashlib.sha256(raw_env).hexdigest() == RETIRED_V120_SEED_SHA256:
+                raise ValueError("Refusing to initialize IsolatedSignerSubprocess with retired v1.2.0 seed.")
+            env["SHARK_ISOLATED_SIGNER_SEED_HEX"] = raw_env.hex()
+
         self._lock = threading.RLock()
         self._proc = subprocess.Popen(
             [sys.executable, "-u", "-c", _SIGNER_DAEMON_CODE],
@@ -378,36 +324,45 @@ def _iv_tanh(z: Any) -> Any:
     return mp.iv.mpf([ta.a, tb.b])
 
 
-def certify_wp19_piecewise_duhamel_bridge(
-    n_segments: int = 120,
-    horizon_T: str = "1.20",
-    whole_path_gronwall_rate: str = "24.50",
-    local_dissipative_rate: str = "-3.50",
-    per_segment_defect_bound: str = "2.35e-4",
-    signed_c500_lower_bound: str = "5.7586e9",
-    preserved_wp19_whole_path_remainder: str = "1.6364e14",
+def evaluate_wp19_piecewise_duhamel_study(
+    data_path: Optional[Path] = None,
+    local_dissipative_rate: Optional[str] = None,
     dps: int = 60,
 ) -> Dict[str, Any]:
     """
-    Track C Upgrade (Program 05 Navier-Stokes WP19 Piecewise 120-Segment Duhamel Interval Verifier):
-    Uses 200-bit outward-rounded interval arithmetic (`mpmath.iv`, `dps=60`) across the `n_segments=120`
-    certified Galerkin segments (`DOI: 10.5281/zenodo.23034545`) to compare:
-      1. The conservative whole-path Grönwall remainder bound (`R_whole = sum_k exp(L*(T - t_k)) * d_k`,
-         alongside the preserved WP19 v0.28 whole-path benchmark remainder `1.6364e14` which exceeds
-         the signed C500 lower bound `5.7586e9`).
-      2. The piecewise segment-by-segment Duhamel contraction bound (`E_{k+1} = exp(mu_eff * dt) * E_k + d_k`
-         proven in Lean 4 Theorem 15 `duhamel_piecewise_contraction_bound`).
-    Computes the exact interval-certified critical local growth rate `mu_crit` below which the
-    120-segment Duhamel remainder falls strictly below `signed_c500_lower_bound = 5.7586e9`, while
-    preserving the `OPEN` status of the unconditional all-cutoff continuum Navier-Stokes bridge.
+    Track C (Illustrative Parameter Study for Program 05 WP19 120-Segment Duhamel Recurrence):
+    Loads assumed segment parameters from the SHA-256-verified `data/wp19_segments.json` file
+    (citing `DOI: 10.5281/zenodo.23034545`) and evaluates the 120-segment Duhamel recurrence
+    `E_{k+1} = exp(mu_eff * dt) * E_k + d_k` in 200-bit outward-rounded `mpmath.iv` arithmetic
+    (`lean/TypestateLifecycle.lean`: `duhamel_piecewise_contraction_bound`).
+    Note: This is an illustrative parameter study given the assumed per-segment rate in
+    `data/wp19_segments.json`, not a certificate of the Navier-Stokes Galerkin chain or continuum PDE.
     """
+    target_path = data_path if data_path is not None else (REPO_ROOT / "data/wp19_segments.json")
+    if not target_path.exists():
+        raise FileNotFoundError(f"Missing WP19 parameter study input file: {target_path}")
+    raw_bytes = target_path.read_bytes()
+    actual_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    if data_path is None and actual_sha256 != WP19_SEGMENTS_EXPECTED_SHA256:
+        raise ValueError(
+            f"SHA-256 mismatch on data/wp19_segments.json: expected {WP19_SEGMENTS_EXPECTED_SHA256}, got {actual_sha256}"
+        )
+    cfg = json.loads(raw_bytes.decode("utf-8"))
+    n_segments = int(cfg["n_segments"])
+    horizon_T = str(cfg["horizon_T"])
+    whole_path_gronwall_rate = str(cfg["whole_path_gronwall_rate"])
+    mu_rate_str = str(local_dissipative_rate if local_dissipative_rate is not None else cfg["assumed_local_dissipative_rate"])
+    per_segment_defect_bound = str(cfg["per_segment_defect_bound"])
+    signed_c500_lower_bound = str(cfg["signed_c500_lower_bound"])
+    preserved_wp19_whole_path_remainder = str(cfg["preserved_wp19_whole_path_remainder"])
+
     if n_segments < 1:
         raise ValueError("n_segments must be >= 1")
     mp.iv.dps = int(dps)
     T_iv = mp.iv.mpf(horizon_T)
     dt_iv = T_iv / mp.iv.mpf(n_segments)
     L_whole = mp.iv.mpf(whole_path_gronwall_rate)
-    mu_loc = mp.iv.mpf(local_dissipative_rate)
+    mu_loc = mp.iv.mpf(mu_rate_str)
     delta_iv = mp.iv.mpf(per_segment_defect_bound)
     c500_lb = mp.iv.mpf(signed_c500_lower_bound)
     wp19_whole_ref = mp.iv.mpf(preserved_wp19_whole_path_remainder)
@@ -421,8 +376,6 @@ def certify_wp19_piecewise_duhamel_bridge(
         err_whole = alpha_whole * err_whole + delta_iv
         err_duhamel = alpha_duhamel * err_duhamel + delta_iv
 
-    # Compute the critical per-segment amplification factor alpha_crit where
-    # delta * (alpha_crit^n - 1) / (alpha_crit - 1) == c500_lb
     mp.mp.dps = int(dps)
     target_ratio = mp.mpf(signed_c500_lower_bound) / mp.mpf(per_segment_defect_bound)
     lo_r, hi_r = mp.mpf("1.0001"), mp.mpf("2.0")
@@ -441,10 +394,13 @@ def certify_wp19_piecewise_duhamel_bridge(
     whole_ref_exceeds_c500 = bool(wp19_whole_ref.a > c500_lb.b)
 
     return {
-        "schema": "shark-wp19-piecewise-duhamel-interval-certificate-v1",
-        "program_05_reference_doi": "10.5281/zenodo.23034545",
+        "schema": "shark-wp19-piecewise-duhamel-parameter-study-v2",
+        "epistemic_status": "ILLUSTRATIVE_PARAMETER_STUDY_GIVEN_ASSUMED_RATES",
+        "data_file_sha256": actual_sha256,
+        "program_05_reference_doi": str(cfg["program_05_reference_doi"]),
         "n_segments": n_segments,
         "dt_segment": str(dt_mp),
+        "assumed_local_dissipative_rate": mu_rate_str,
         "interval_precision_dps": dps,
         "preserved_wp19_whole_path_remainder": preserved_wp19_whole_path_remainder,
         "signed_c500_lower_bound": signed_c500_lower_bound,
@@ -457,6 +413,10 @@ def certify_wp19_piecewise_duhamel_bridge(
         "preserved_whole_path_exceeds_c500_bound": whole_ref_exceeds_c500,
         "continuum_all_cutoff_status": "OPEN",
     }
+
+
+# Keep backwards-compatible alias pointing to the parameter study
+certify_wp19_piecewise_duhamel_bridge = evaluate_wp19_piecewise_duhamel_study
 
 
 class LifecycleState(str, enum.Enum):
@@ -501,12 +461,10 @@ class RequestSlot:
         self,
         slot_epoch: int,
         state: LifecycleState = LifecycleState.UNINIT,
-        is_zeroed: bool = False,
     ) -> None:
         self._lock = threading.RLock()
         self._slot_epoch = int(slot_epoch)
         self._state: LifecycleState = LifecycleState(state)
-        self._is_zeroed: bool = bool(is_zeroed)
         self._payload: Optional[Dict[str, Any]] = None
         self._fence_seq: int = 0
 
@@ -530,14 +488,23 @@ class RequestSlot:
 
     @property
     def is_zeroed(self) -> bool:
+        """Derived strictly from `_state == ZEROED_FREED` so `(ABORTED_POISONED, is_zeroed=True)` is unreachable."""
         with self._lock:
-            return self._is_zeroed
+            return self._state == LifecycleState.ZEROED_FREED
 
-    @is_zeroed.setter
-    def is_zeroed(self, val: bool) -> None:
+    def step_total_automaton(self, event: LifecycleEvent, payload: Optional[Dict[str, Any]] = None) -> LifecycleState:
+        """
+        Total transition function matching `stepLifecycle` in `lean/TypestateLifecycle.lean`
+        state-for-state across all 6 states and 5 events without raising on invalid inputs
+        (used by differential trace tests against `data/lean_transition_table.json`).
+        """
         with self._lock:
-            self._is_zeroed = bool(val)
-            self._fence_seq += 1
+            try:
+                if event == LifecycleEvent.SEAL_SUCCESS and payload is None:
+                    payload = {"differential_trace": True}
+                return self.transition(event, payload=payload)
+            except TypestateViolationError:
+                return self._state
 
     @property
     def fence_seq(self) -> int:
@@ -547,7 +514,7 @@ class RequestSlot:
     def snapshot(self) -> Tuple[int, LifecycleState, bool, int]:
         """Return a single lock-consistent atomic tuple `(slot_epoch, state, is_zeroed, fence_seq)`."""
         with self._lock:
-            return (self._slot_epoch, self._state, self._is_zeroed, self._fence_seq)
+            return (self._slot_epoch, self._state, self.is_zeroed, self._fence_seq)
 
     def transition(self, event: LifecycleEvent, payload: Optional[Dict[str, Any]] = None) -> LifecycleState:
         with self._lock:
@@ -574,7 +541,6 @@ class RequestSlot:
                 self._state = LifecycleState.SHUTDOWN_CLEAN
             elif self._state in (LifecycleState.SHUTDOWN_CLEAN, LifecycleState.ABORTED_POISONED) and event == LifecycleEvent.ZERO_AND_FREE:
                 self._payload = None
-                self._is_zeroed = True
                 self._state = LifecycleState.ZEROED_FREED
             else:
                 self._payload = None
@@ -622,7 +588,7 @@ class RequestSlot:
 
     def dereference_payload(self) -> Dict[str, Any]:
         with self._lock:
-            if self._state != LifecycleState.SEALED_ACTIVE or self._is_zeroed or self._payload is None:
+            if self._state != LifecycleState.SEALED_ACTIVE or self.is_zeroed or self._payload is None:
                 raise TypestateViolationError(
                     f"Typestate guard: payload dereference blocked in state {self._state.value}."
                 )
@@ -888,6 +854,7 @@ class SharkProtocolEngine:
         lam_lucid: float = 0.30,
         kappa_meta: float = 2.50,
         signing_seed: Optional[bytes] = None,
+        ledger_path: Optional[Path] = None,
     ) -> None:
         self.a = float(a)
         self.b = float(b)
@@ -917,6 +884,7 @@ class SharkProtocolEngine:
         self.time_t = 0.0
 
         self.signer = Ed25519AuthoritySigner(seed=signing_seed)
+        self.ledger_path: Optional[Path] = Path(ledger_path) if ledger_path is not None else None
         self.ledger: List[Dict[str, Any]] = []
         self.epoch_guard = WorkerEpochGuard(initial_epoch=1)
         self.lrsc = LRSCCompressor()
@@ -1284,36 +1252,35 @@ class SharkProtocolEngine:
 
     def seal_wp19_duhamel_interval_claim(
         self,
-        local_dissipative_rate: str = "-3.50",
+        local_dissipative_rate: Optional[str] = None,
         timestamp_utc: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Run `certify_wp19_piecewise_duhamel_bridge` (Track C) and seal an `INTERVAL_CERTIFIED_RESULT` claim into the VRK ledger."""
-        cert = certify_wp19_piecewise_duhamel_bridge(local_dissipative_rate=local_dissipative_rate)
-        cert_digest = sha256_canonical(cert)
+        """Run `evaluate_wp19_piecewise_duhamel_study` (Track C) on `data/wp19_segments.json` and seal a `NUMERICAL_OBSERVATION` claim into the VRK ledger."""
+        study = evaluate_wp19_piecewise_duhamel_study(local_dissipative_rate=local_dissipative_rate)
+        study_digest = sha256_canonical(study)
         entry = self.seal_claim(
-            claim_id="shark.track_c.wp19_piecewise_duhamel_120seg",
+            claim_id="shark.track_c.wp19_piecewise_duhamel_parameter_study",
             claim_text=(
-                f"120-segment piecewise Duhamel interval certificate (DOI: 10.5281/zenodo.23034545): "
-                f"dissipative remainder {cert['piecewise_duhamel_interval_hi']:.3e} < C500 bound {cert['signed_c500_lower_bound']} "
-                f"(mu_crit={cert['critical_segment_growth_rate_mu_crit']:.4f}); continuum bridge remains OPEN."
+                f"Illustrative 120-segment piecewise Duhamel parameter study given assumed rates in data/wp19_segments.json "
+                f"(DOI: 10.5281/zenodo.23034545): remainder {study['piecewise_duhamel_interval_hi']:.3e} vs C500 bound {study['signed_c500_lower_bound']} "
+                f"(mu_crit={study['critical_segment_growth_rate_mu_crit']:.4f}); continuum bridge remains OPEN."
             ),
-            claim_class="INTERVAL_CERTIFIED_RESULT",
+            claim_class="NUMERICAL_OBSERVATION",
             applies_to=[
-                "120-segment finite Galerkin N=11..18 piecewise Duhamel remainder vs. whole-path Gronwall bound",
+                "Illustrative 120-segment Duhamel recurrence given assumed segment rates loaded from data/wp19_segments.json",
             ],
             does_not_imply=[
-                "Unconditional continuum 3D Navier-Stokes regularity or cutoff-uniform analytic proof of mu_eff <= mu_crit",
+                "Certification of the Navier-Stokes Galerkin chain without Arb-certified per-segment rates, or continuum 3D Navier-Stokes regularity",
             ],
             evidence=[
                 {"role": "definition", "path": "lean/TypestateLifecycle.lean#duhamel_piecewise_contraction_bound"},
-                {"role": "interval_certificate", "path": "shark_protocol/kernel.py#certify_wp19_piecewise_duhamel_bridge"},
-                {"role": "verifier", "path": "tests/test_core.py#test_33_track_c_wp19_piecewise_duhamel_120_segment_interval_bridge"},
+                {"role": "execution_record", "path": "data/wp19_segments.json"},
             ],
-            prompt_sha256=cert_digest,
-            response_sha256=cert_digest,
+            prompt_sha256=study_digest,
+            response_sha256=study_digest,
             timestamp_utc=timestamp_utc,
         )
-        return {"certificate": cert, "vrk_entry": entry}
+        return {"certificate": study, "vrk_entry": entry}
 
     def evaluate_basin_separatrix_guard(
         self,
@@ -1530,15 +1497,68 @@ class SharkProtocolEngine:
             sig = self.signer.sign_digest_hex(digest)
             sealed_entry = dict(record_body, digest=digest, ed25519_signature=sig)
             self.ledger.append(sealed_entry)
+            if self.ledger_path is not None:
+                self._append_entry_fsync(self.ledger_path, sealed_entry)
             return sealed_entry
+
+    @staticmethod
+    def _append_entry_fsync(path: Path, entry: Dict[str, Any]) -> None:
+        """Append a single canonical JSON record line to `path` and flush + `os.fsync` to disk."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line_bytes = canonical_json_bytes(entry) + b"\n"
+        with open(path, "ab") as f:
+            f.write(line_bytes)
+            f.flush()
+            os.fsync(f.fileno())
+
+    def sign_head_record(self) -> Dict[str, Any]:
+        """
+        Task B: Produce an Ed25519-signed head commitment `(head_index, ledger_length, head_hash)`
+        so tail truncation of an in-memory or on-disk ledger is deterministically detected.
+        """
+        with self._lock:
+            if not self.ledger:
+                raise RuntimeError("Cannot sign head record of an empty ledger.")
+            head_body = {
+                "schema": "intentseal-vrk-head-v1",
+                "head_index": len(self.ledger) - 1,
+                "ledger_length": len(self.ledger),
+                "head_hash": str(self.ledger[-1]["digest"]),
+                "trust_root": VRK_TRUST_ROOT_DIGEST,
+                "signer_pubkey": self.public_key_hex,
+            }
+            head_digest = sha256_canonical(head_body)
+            sig = self.signer.sign_digest_hex(head_digest)
+            return dict(head_body, head_digest=head_digest, ed25519_signature=sig)
+
+    @staticmethod
+    def _normalize_trusted_pubkeys(expected_pubkey: Any) -> Optional[Set[str]]:
+        if isinstance(expected_pubkey, str):
+            k = expected_pubkey.strip().lower()
+            if not _is_hex64(k) or k == RETIRED_V120_PUBKEY_HEX:
+                return None
+            return {k}
+        if isinstance(expected_pubkey, (set, frozenset, list, tuple)):
+            out: Set[str] = set()
+            for item in expected_pubkey:
+                if not isinstance(item, str):
+                    return None
+                k = item.strip().lower()
+                if not _is_hex64(k) or k == RETIRED_V120_PUBKEY_HEX:
+                    return None
+                out.add(k)
+            return out if out else None
+        return None
 
     @classmethod
     def verify_chain_list(
         cls,
         chain: Sequence[Dict[str, Any]],
-        expected_pubkey: Optional[str] = None,
+        *,
+        expected_pubkey: Any,
         known_parent_digests: Optional[Iterable[str]] = None,
         check_disk_evidence: bool = True,
+        signed_head: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, str]:
         """
         Verify a ledger sequence against VRK v0.3.1 hash-chain, multi-parent membership,
@@ -1550,6 +1570,9 @@ class SharkProtocolEngine:
         - Rejects any non-merge entry with `len(parents) != 1` or `parents[0] != expected_prev`.
         - Verifies `prompt_sha256`, `response_sha256`, on-disk `evidence_root`, and `ed25519_signature`.
         """
+        trusted_pubkeys = cls._normalize_trusted_pubkeys(expected_pubkey)
+        if not trusted_pubkeys:
+            return False, "Missing, malformed, or revoked expected_pubkey; verifier refuses unpinned keys."
         known_digests: Set[str] = {VRK_TRUST_ROOT_DIGEST}
         if known_parent_digests is not None:
             for d in known_parent_digests:
@@ -1613,7 +1636,7 @@ class SharkProtocolEngine:
                     if "merged_claim_digests" in s_rec:
                         return False, f"Entry {idx} merged_branch_records[{s_idx}] cannot be a nested merge."
                     ok_sub, msg_sub = cls._verify_single_base_record(
-                        s_rec, sub_digests_local, expected_pubkey=expected_pubkey, check_disk_evidence=check_disk_evidence
+                        s_rec, sub_digests_local, trusted_pubkeys=trusted_pubkeys, check_disk_evidence=check_disk_evidence
                     )
                     if not ok_sub:
                         return False, f"Entry {idx} embedded branch record {s_idx} invalid: {msg_sub}"
@@ -1639,14 +1662,36 @@ class SharkProtocolEngine:
             if recomputed != entry.get("digest"):
                 return False, f"Entry {idx} SHA-256 digest mismatch (tampering detected)."
 
-            signer_pub = entry.get("signer_pubkey", "")
-            sig_hex = entry.get("ed25519_signature", "")
-            if expected_pubkey is not None and signer_pub != expected_pubkey:
-                return False, f"Entry {idx} signer_pubkey mismatch against expected authority key."
+            signer_pub = str(entry.get("signer_pubkey", "")).lower()
+            sig_hex = str(entry.get("ed25519_signature", ""))
+            if signer_pub not in trusted_pubkeys:
+                return False, f"Entry {idx} signer_pubkey mismatch against pinned expected_pubkey set."
             if not Ed25519AuthoritySigner.verify_digest_signature(signer_pub, recomputed, sig_hex):
                 return False, f"Entry {idx} Ed25519 signature verification failed (unauthorized rewrite rejected)."
 
             known_digests.add(recomputed)
+
+        if signed_head is not None:
+            if signed_head.get("schema") != "intentseal-vrk-head-v1":
+                return False, "Invalid signed_head schema."
+            head_pub = str(signed_head.get("signer_pubkey", "")).lower()
+            if head_pub not in trusted_pubkeys:
+                return False, "signed_head signer_pubkey not in pinned expected_pubkey set."
+            head_body = {
+                k: v for k, v in signed_head.items() if k not in ("head_digest", "ed25519_signature")
+            }
+            recomputed_head = sha256_canonical(head_body)
+            if recomputed_head != signed_head.get("head_digest"):
+                return False, "signed_head SHA-256 digest mismatch."
+            if not Ed25519AuthoritySigner.verify_digest_signature(
+                head_pub, recomputed_head, str(signed_head.get("ed25519_signature", ""))
+            ):
+                return False, "signed_head Ed25519 signature verification failed."
+            if len(chain) != signed_head.get("ledger_length") or (len(chain) - 1) != signed_head.get("head_index"):
+                return False, "Ledger tail truncation detected: length/head_index mismatch against signed_head."
+            if not chain or chain[-1].get("digest") != signed_head.get("head_hash"):
+                return False, "Ledger tail truncation or head_hash mismatch detected against signed_head."
+
         return True, "VRK_HASH_CHAIN_AND_ED25519_VERIFIED"
 
     @classmethod
@@ -1654,7 +1699,8 @@ class SharkProtocolEngine:
         cls,
         entry: Dict[str, Any],
         known_digests: Set[str],
-        expected_pubkey: Optional[str] = None,
+        *,
+        trusted_pubkeys: Set[str],
         check_disk_evidence: bool = True,
     ) -> Tuple[bool, str]:
         if entry.get("schema") != "intentseal-vrk-claim-v2":
@@ -1680,7 +1726,7 @@ class SharkProtocolEngine:
             return False, "base record SHA-256 mismatch"
         signer_pub = entry.get("signer_pubkey", "")
         sig_hex = entry.get("ed25519_signature", "")
-        if expected_pubkey is not None and signer_pub != expected_pubkey:
+        if str(signer_pub).lower() not in trusted_pubkeys:
             return False, "base record signer_pubkey mismatch"
         if not Ed25519AuthoritySigner.verify_digest_signature(signer_pub, recomputed, sig_hex):
             return False, "base record Ed25519 signature invalid"
@@ -1698,6 +1744,7 @@ class SharkProtocolEngine:
         *extra_branches: Sequence[Dict[str, Any]],
         merge_timestamp_utc: str = "2026-10-25T00:00:00Z",
         signer: Optional[Ed25519AuthoritySigner] = None,
+        expected_pubkey: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         N-Way Commutative, Associative, and Idempotent Merkle-DAG Join-Semilattice Reconciliation
@@ -1707,11 +1754,12 @@ class SharkProtocolEngine:
         merge claim with Ed25519.
         """
         auth_signer = signer if signer is not None else Ed25519AuthoritySigner()
+        trusted_keys = expected_pubkey if expected_pubkey is not None else {auth_signer.public_key_hex}
         all_branches = [branch_a, branch_b] + list(extra_branches)
         for b_idx, br in enumerate(all_branches):
             if not br:
                 raise ValueError(f"Branch {b_idx} must be non-empty to merge.")
-            ok, reason = cls.verify_chain_list(br)
+            ok, reason = cls.verify_chain_list(br, expected_pubkey=trusted_keys)
             if not ok:
                 raise RuntimeError(f"Split-brain merge rejected: branch {b_idx} invalid ({reason})")
 
@@ -1833,17 +1881,24 @@ class SharkProtocolEngine:
         patankar_res = self.step_ode_patankar_interval(dt=0.05)
         nagumo_res = self.verify_nagumo_boundary_certificate()
 
-        na, nb, nc = SharkProtocolEngine(), SharkProtocolEngine(), SharkProtocolEngine()
+        audit_seed = self.signer._seed
+        na = SharkProtocolEngine(signing_seed=audit_seed)
+        nb = SharkProtocolEngine(signing_seed=audit_seed)
+        nc = SharkProtocolEngine(signing_seed=audit_seed)
         na.seal_claim("c.a", "Branch A", timestamp_utc="2026-10-25T00:00:00Z")
         nb.seal_claim("c.b", "Branch B", timestamp_utc="2026-10-25T00:00:00Z")
         nc.seal_claim("c.c", "Branch C", timestamp_utc="2026-10-25T00:00:00Z")
-        m_ab_c = self.merge_divergent_ledgers([self.merge_divergent_ledgers(na.ledger, nb.ledger)], nc.ledger)
-        m_a_bc = self.merge_divergent_ledgers(na.ledger, [self.merge_divergent_ledgers(nb.ledger, nc.ledger)])
-        assoc_ok = (m_ab_c["digest"] == m_a_bc["digest"]) and self.verify_chain_list([m_ab_c])[0]
+        m_ab = self.merge_divergent_ledgers(na.ledger, nb.ledger, signer=self.signer, expected_pubkey=self.public_key_hex)
+        m_bc = self.merge_divergent_ledgers(nb.ledger, nc.ledger, signer=self.signer, expected_pubkey=self.public_key_hex)
+        m_ab_c = self.merge_divergent_ledgers([m_ab], nc.ledger, signer=self.signer, expected_pubkey=self.public_key_hex)
+        m_a_bc = self.merge_divergent_ledgers(na.ledger, [m_bc], signer=self.signer, expected_pubkey=self.public_key_hex)
+        assoc_ok = (m_ab_c["digest"] == m_a_bc["digest"]) and self.verify_chain_list(
+            [m_ab_c], expected_pubkey=self.public_key_hex
+        )[0]
 
         mp_iv_res = self.step_ode_patankar_mp_interval(dt=0.05)
-        wp19_res = certify_wp19_piecewise_duhamel_bridge()
-        with IsolatedSignerSubprocess() as iso_signer:
+        wp19_res = evaluate_wp19_piecewise_duhamel_study()
+        with IsolatedSignerSubprocess(generate_ephemeral=True) as iso_signer:
             sig_iso = iso_signer.sign_digest_hex(VRK_TRUST_ROOT_DIGEST)
             iso_ok = Ed25519AuthoritySigner.verify_digest_signature(
                 iso_signer.public_key_hex, VRK_TRUST_ROOT_DIGEST, sig_iso
@@ -1857,7 +1912,7 @@ class SharkProtocolEngine:
             "patankar_interval_step_certified": patankar_res["inside_B4_certified"],
             "track_a_mpmath_iv_200bit_certified": mp_iv_res["inside_B4_mp_iv_certified"],
             "track_b_isolated_signer_subprocess_verified": iso_ok,
-            "track_c_wp19_piecewise_duhamel_certified": wp19_res["duhamel_remainder_below_c500_bound"],
+            "track_c_wp19_parameter_study_evaluated": wp19_res["duhamel_remainder_below_c500_bound"],
             "nagumo_8face_certified": nagumo_res["all_8_faces_certified"],
             "merkle_dag_nway_associative": assoc_ok,
             "all_checks_passed": (

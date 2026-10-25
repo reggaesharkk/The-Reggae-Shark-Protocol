@@ -1,0 +1,18 @@
+{
+  "assumed_local_dissipative_rate": "-3.50",
+  "continuum_all_cutoff_status": "OPEN",
+  "does_not_imply": [
+    "Does not certify the Navier-Stokes Galerkin chain unless per-segment dissipative rates are independently certified from Arb interval enclosures",
+    "Does not establish continuum 3D Navier-Stokes regularity or an all-cutoff theorem"
+  ],
+  "epistemic_status": "ILLUSTRATIVE_PARAMETER_STUDY_GIVEN_ASSUMED_RATES",
+  "horizon_T": "1.20",
+  "n_segments": 120,
+  "per_segment_defect_bound": "2.35e-4",
+  "preserved_wp19_whole_path_remainder": "1.6364e14",
+  "program_05_archive_sha256": "858eeec4a1cb323d23e91ffa9914af823a388a78ecc39c758abea3fcdec9ac5e",
+  "program_05_reference_doi": "10.5281/zenodo.23034545",
+  "schema": "shark-wp19-assumed-segment-study-inputs-v1",
+  "signed_c500_lower_bound": "5.7586e9",
+  "whole_path_gronwall_rate": "24.50"
+}

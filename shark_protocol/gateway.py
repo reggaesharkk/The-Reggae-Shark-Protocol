@@ -1,27 +1,27 @@
 """
 Layer 4: Fail-Closed Multi-Cloud Execution Gateway & Hardened Loopback HTTP Proxy (`shark_protocol/gateway.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.3.0 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v4 DOI: 10.5281/zenodo.23635351 | v3 DOI: 10.5281/zenodo.23624605)
+Version: 1.3.1 (Reviewer-Audited Edition | Concept DOI: 10.5281/zenodo.23618032 | Prior v4 DOI: 10.5281/zenodo.23635351)
 
-Audit Item 4 Hardening Summary:
+Hardening Summary (v1.3.1):
 1. Strict Fail-Closed Provider Dispatch:
    - Silent cross-provider fallback is disabled by default (`allow_failover=False`).
    - If a live API key is configured for the target provider (or `require_live_dispatch=True`) and
      the external HTTP call fails, `process_request` aborts the request slot (`ABORTED_POISONED` ->
-     `ZEROED_FREED`) and raises `GatewayDispatchError` fail-closed. It NEVER falls back to returning
-     a simulated response string when live dispatch fails.
+     `ZEROED_FREED`) and raises `GatewayDispatchError` fail-closed.
    - Offline simulation (`VRK_OFFLINE_SEALED_SIMULATION`) runs only when no live API key is configured
      and `require_live_dispatch=False`, cross-checking both `step_ode` (RK4) and
      `step_ode_patankar_interval` (Patankar-Euler) before sealing.
-2. Bounded-LRU Per-Tenant Engine Isolation:
-   - Validates `tenant_id` against `^[A-Za-z0-9_.-]{1,64}$` and bounds `_tenant_engines` using an
-     `OrderedDict` LRU cache (`max_tenants=128`) so unauthenticated tenant strings cannot exhaust memory.
+2. Token-Bound Tenant Derivation, Bounded-LRU Isolation & Per-Tenant Rate Limiting:
+   - Validates `tenant_id` against `^[A-Za-z0-9_.-]{1,64}$`, binds HTTP tenant identity to the
+     authenticated Bearer token (`derive_tenant_from_token`), bounds `_tenant_engines` using an
+     `OrderedDict` LRU cache (`max_tenants=128`), and enforces a sliding-window rate limit
+     (`rate_limit_per_window=120` per `rate_limit_window_sec=60.0`, returning HTTP 429 when exceeded).
 3. Header-Only API Key Transmission:
    - Sends the Google Gemini API key via the `x-goog-api-key` HTTP header, never in the URL query string.
 4. Hardened `ThreadingHTTPServer`:
-   - Uses concurrent `ThreadingHTTPServer` instead of single-threaded `HTTPServer`.
-   - Enforces `MAX_CONTENT_LENGTH = 65536` (returning HTTP `413 Payload Too Large` before reading oversized bodies).
-   - Refuses non-loopback bind hosts (such as `0.0.0.0`) unless `allow_remote=True` AND a non-empty Bearer token
+   - Enforces `MAX_HTTP_CONTENT_LENGTH = 65536` (returning HTTP `413 Payload Too Large`).
+   - Refuses non-loopback bind hosts unless `allow_remote=True` AND a non-empty Bearer token
      (`auth_token` or `SHARK_GATEWAY_BEARER_TOKEN`) is configured, verified via `hmac.compare_digest`.
    - Returns sanitized JSON on HTTP `500` without leaking internal exception tracebacks (`str(exc)`).
 """
@@ -35,8 +35,9 @@ import json
 import os
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
@@ -56,6 +57,10 @@ MAX_HTTP_CONTENT_LENGTH = 65536
 
 class GatewayConfigError(ValueError):
     """Raised when an invalid provider, tenant_id, or unsafe HTTP bind configuration is requested."""
+
+
+class GatewayRateLimitError(GatewayConfigError):
+    """Raised when a tenant exceeds its configured sliding-window request rate limit."""
 
 
 class GatewayDispatchError(RuntimeError):
@@ -101,17 +106,45 @@ class MultiProviderGateway:
         engine: Optional[SharkProtocolEngine] = None,
         min_waking_p0: float = 1.0,
         max_tenants: int = 128,
+        signing_seed: Optional[bytes] = None,
+        rate_limit_per_window: int = 120,
+        rate_limit_window_sec: float = 60.0,
     ) -> None:
         if min_waking_p0 < 10.0 / 99.0:
             raise ValueError("min_waking_p0 must be >= P_crit = 10/99 to guarantee waking basin persistence.")
         if max_tenants < 1:
             raise ValueError("max_tenants must be >= 1")
+        if rate_limit_per_window < 1 or rate_limit_window_sec <= 0.0:
+            raise ValueError("rate_limit_per_window must be >= 1 and rate_limit_window_sec > 0.")
         self.min_waking_p0 = float(min_waking_p0)
         self.max_tenants = int(max_tenants)
-        self.engine = engine if engine is not None else SharkProtocolEngine()
+        self.rate_limit_per_window = int(rate_limit_per_window)
+        self.rate_limit_window_sec = float(rate_limit_window_sec)
+        self.engine = engine if engine is not None else SharkProtocolEngine(signing_seed=signing_seed)
         self._gateway_lock = threading.RLock()
         self._tenant_engines: "collections.OrderedDict[str, SharkProtocolEngine]" = collections.OrderedDict()
         self._tenant_engines["default"] = self.engine
+        self._tenant_windows: Dict[str, Deque[float]] = collections.defaultdict(collections.deque)
+
+    @staticmethod
+    def derive_tenant_from_token(bearer_token: str) -> str:
+        """Bind tenant identity deterministically to an authenticated Bearer token."""
+        digest = hashlib.sha256(b"shark_tenant_token_binding_v1:" + bearer_token.encode("utf-8")).hexdigest()
+        return f"t_{digest[:16]}"
+
+    def _check_rate_limit(self, norm_tenant_id: str) -> None:
+        now = time.monotonic()
+        with self._gateway_lock:
+            dq = self._tenant_windows[norm_tenant_id]
+            cutoff = now - self.rate_limit_window_sec
+            while dq and dq[0] <= cutoff:
+                dq.popleft()
+            if len(dq) >= self.rate_limit_per_window:
+                raise GatewayRateLimitError(
+                    f"Rate limit exceeded for tenant '{norm_tenant_id}': max {self.rate_limit_per_window} "
+                    f"requests per {self.rate_limit_window_sec:.1f}s window."
+                )
+            dq.append(now)
 
     def get_tenant_engine(self, tenant_id: str = "default") -> SharkProtocolEngine:
         """Return a bounded-LRU isolated `SharkProtocolEngine` for `tenant_id`."""
@@ -126,13 +159,14 @@ class MultiProviderGateway:
                 return self._tenant_engines[norm_id]
 
             while len(self._tenant_engines) >= self.max_tenants:
-                # Evict oldest non-default tenant (or oldest entry if max_tenants == 1)
                 oldest_key = next(iter(self._tenant_engines))
                 if oldest_key == "default" and len(self._tenant_engines) > 1:
                     second_key = list(self._tenant_engines.keys())[1]
                     del self._tenant_engines[second_key]
+                    self._tenant_windows.pop(second_key, None)
                 else:
-                    self._tenant_engines.popitem(last=False)
+                    evicted_key, _ = self._tenant_engines.popitem(last=False)
+                    self._tenant_windows.pop(evicted_key, None)
 
             new_eng = SharkProtocolEngine(
                 a=self.engine.a,
@@ -153,6 +187,7 @@ class MultiProviderGateway:
                 lam_sim=self.engine.lam_sim,
                 lam_lucid=self.engine.lam_lucid,
                 kappa_meta=self.engine.kappa_meta,
+                signing_seed=self.engine.signer._seed,
             )
             self._tenant_engines[norm_id] = new_eng
             return new_eng
@@ -177,7 +212,6 @@ class MultiProviderGateway:
             data = resp.json()
             return str(data["choices"][0]["message"]["content"])
         if provider == "gemini":
-            # Audit Item 4 Fix: Send Gemini API key in x-goog-api-key header, never in URL query string
             resp = requests.post(
                 spec["url"],
                 headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
@@ -219,6 +253,9 @@ class MultiProviderGateway:
             )
 
         target_engine = self.get_tenant_engine(tenant_id)
+        norm_id = (tenant_id or "default").strip() or "default"
+        self._check_rate_limit(norm_id)
+
         raw_p0 = (1.0 + min(5.0, len(prompt) / 80.0)) if requested_p0 is None else float(requested_p0)
         effective_p0 = max(self.min_waking_p0, min(6.0, raw_p0))
 
@@ -248,7 +285,7 @@ class MultiProviderGateway:
                     "prompt": prompt,
                     "prompt_sha256": lrsc_bundle["prompt_sha256"],
                     "provider": provider_norm,
-                    "tenant_id": tenant_id,
+                    "tenant_id": norm_id,
                     "lrsc_sha256": lrsc_bundle["lrsc_sha256"],
                     "uncompressed_fallback_sha256": lrsc_bundle["uncompressed_fallback_sha256"],
                     "ode_snapshot": ode_snapshot,
@@ -256,7 +293,6 @@ class MultiProviderGateway:
             )
             verified_payload = target_engine.epoch_guard.read_slot(slot)
 
-            # Audit Item 4 Fix: Strict fail-closed provider dispatch
             candidate_order: List[str] = [provider_norm]
             if allow_failover:
                 candidate_order.extend(
@@ -308,8 +344,8 @@ class MultiProviderGateway:
             response_sha256 = hashlib.sha256(response_text.encode("utf-8")).hexdigest()
 
             vrk_entry = target_engine.seal_claim(
-                claim_id=f"gateway.exec.{tenant_id}.epoch_{slot.slot_epoch}",
-                claim_text=f"4-layer verified gateway execution (mode={dispatch_mode}, provider={used_provider}, tenant={tenant_id}).",
+                claim_id=f"gateway.exec.{norm_id}.epoch_{slot.slot_epoch}",
+                claim_text=f"4-layer verified gateway execution (mode={dispatch_mode}, provider={used_provider}, tenant={norm_id}).",
                 claim_class="REPRODUCED_RESULT",
                 lrsc_digest=lrsc_bundle["lrsc_sha256"],
                 uncompressed_ring_digest=lrsc_bundle["uncompressed_fallback_sha256"],
@@ -322,7 +358,7 @@ class MultiProviderGateway:
                 "status": "SEALED_OK",
                 "dispatch_mode": dispatch_mode,
                 "provider": used_provider,
-                "tenant_id": tenant_id,
+                "tenant_id": norm_id,
                 "effective_p0": effective_p0,
                 "prompt_sha256": prompt_sha256,
                 "response_sha256": response_sha256,
@@ -347,6 +383,7 @@ def create_gateway_http_server(
     allow_remote: bool = False,
     auth_token: Optional[str] = None,
     max_content_length: int = MAX_HTTP_CONTENT_LENGTH,
+    bind_tenant_to_token: bool = True,
 ) -> Tuple[ThreadingHTTPServer, MultiProviderGateway]:
     norm_host = host.strip()
     effective_token = (auth_token if auth_token is not None else os.environ.get("SHARK_GATEWAY_BEARER_TOKEN", "")).strip()
@@ -372,6 +409,12 @@ def create_gateway_http_server(
             self.end_headers()
             self.wfile.write(raw)
 
+        def _extract_bearer_token(self) -> Optional[str]:
+            hdr = self.headers.get("Authorization", "")
+            if hdr.startswith("Bearer "):
+                return hdr[len("Bearer "):].strip()
+            return None
+
         def _check_auth(self) -> bool:
             if not effective_token:
                 return True
@@ -387,9 +430,9 @@ def create_gateway_http_server(
                 ok, detail = gw.engine.verify_ledger_integrity()
                 self._send_json(200, {
                     "status": "healthy" if ok else "degraded",
-                    "version": "1.3.0",
+                    "version": "1.3.1",
                     "concept_doi": "10.5281/zenodo.23618032",
-                    "doi": "10.5281/zenodo.23635351",
+                    "doi": "10.5281/zenodo.23618032",
                     "vrk_chain_status": detail,
                     "ledger_length": len(gw.engine.ledger),
                     "worker_epoch": gw.engine.epoch_guard.worker_epoch,
@@ -424,13 +467,18 @@ def create_gateway_http_server(
                         raise GatewayConfigError("Request JSON payload must be an object.")
                     prompt = str(req_data.get("prompt", ""))
                     provider = str(req_data.get("provider", "groq"))
-                    tenant_id = str(req_data.get("tenant_id", "default"))
+                    tok = self._extract_bearer_token()
+                    if bind_tenant_to_token and tok:
+                        tenant_id = gw.derive_tenant_from_token(tok)
+                    else:
+                        tenant_id = str(req_data.get("tenant_id", "default"))
                     result = gw.process_request(prompt=prompt, provider=provider, tenant_id=tenant_id)
                     self._send_json(200, result)
+                except GatewayRateLimitError as exc:
+                    self._send_json(429, {"error": str(exc)})
                 except (GatewayConfigError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                     self._send_json(400, {"error": str(exc)})
                 except Exception:
-                    # Audit Item 4 Fix: Never leak internal exception tracebacks or str(exc) on 500
                     self._send_json(500, {
                         "error": "Internal gateway verification error (slot poisoned and zeroed).",
                         "status": "FAIL_CLOSED",
@@ -451,7 +499,7 @@ def run_http_gateway_server(
     server, _ = create_gateway_http_server(
         host=host, port=port, allow_remote=allow_remote, auth_token=auth_token
     )
-    print(f"The Shark Protocol (v1.3.0) HTTP Security Gateway listening on http://{host}:{port}")
+    print(f"The Shark Protocol (v1.3.1) HTTP Security Gateway listening on http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

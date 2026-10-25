@@ -1,7 +1,7 @@
 """
 Unit, Integration, and Red-Team Stress Suite (`tests/test_core.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.3.0 (34 Tests: `test_01` .. `test_34`)
+Version: 1.3.1 (38 Tests: `test_01` .. `test_38`)
 
 Covers:
   - Layer 1: VRK v0.3.1 SHA-256 hash-chain, Ed25519 signature, & tamper rejection (`test_01`, `test_02`, `test_05`)
@@ -37,12 +37,17 @@ import numpy as np
 from shark_protocol.gateway import (
     GatewayConfigError,
     GatewayDispatchError,
+    GatewayRateLimitError,
     MultiProviderGateway,
     create_gateway_http_server,
 )
 from shark_protocol.kernel import (
     FLOAT64_NORMAL_MIN,
+    RETIRED_V120_PUBKEY_HEX,
+    RETIRED_V120_SEED_SHA256,
     VRK_TRUST_ROOT_DIGEST,
+    WP19_SEGMENTS_EXPECTED_SHA256,
+    evaluate_wp19_piecewise_duhamel_study,
     BasinCollapseError,
     Ed25519AuthoritySigner,
     IsolatedSignerSubprocess,
@@ -59,7 +64,22 @@ from shark_protocol.kernel import (
 )
 
 
+# Explicit, clearly-labelled untrusted test-only Ed25519 seed (never used in production)
+UNTRUSTED_TEST_ONLY_SEED = b"UNTRUSTED_TEST_SEED_SHARK_V131!!"
+UNTRUSTED_TEST_ONLY_SEED_HEX = UNTRUSTED_TEST_ONLY_SEED.hex()
+
+
 class TestSharkProtocolSuite(unittest.TestCase):
+
+    def setUp(self) -> None:
+        self._prev_seed_env = os.environ.get("SHARK_ED25519_SEED_HEX")
+        os.environ["SHARK_ED25519_SEED_HEX"] = UNTRUSTED_TEST_ONLY_SEED_HEX
+
+    def tearDown(self) -> None:
+        if self._prev_seed_env is None:
+            os.environ.pop("SHARK_ED25519_SEED_HEX", None)
+        else:
+            os.environ["SHARK_ED25519_SEED_HEX"] = self._prev_seed_env
 
     def test_01_vrk_hash_chain_continuity(self) -> None:
         engine = SharkProtocolEngine()
@@ -179,8 +199,8 @@ class TestSharkProtocolSuite(unittest.TestCase):
             with urllib_request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as resp:
                 health = json.loads(resp.read().decode("utf-8"))
                 self.assertEqual(health["status"], "healthy")
-                self.assertEqual(health["version"], "1.3.0")
-                self.assertEqual(health["doi"], "10.5281/zenodo.23635351")
+                self.assertEqual(health["version"], "1.3.1")
+                self.assertEqual(health["doi"], "10.5281/zenodo.23618032")
 
             req = urllib_request.Request(
                 f"http://127.0.0.1:{port}/v1/execute",
@@ -498,7 +518,7 @@ class TestSharkProtocolSuite(unittest.TestCase):
         forged["digest"] = forged_digest
         forged["ed25519_signature"] = engine.signer.sign_digest_hex(forged_digest)
 
-        ok, msg = SharkProtocolEngine.verify_chain_list(engine.ledger + [forged])
+        ok, msg = SharkProtocolEngine.verify_chain_list(engine.ledger + [forged], expected_pubkey=engine.public_key_hex)
         self.assertFalse(ok)
         self.assertIn("forgery rejected", msg)
 
@@ -514,7 +534,7 @@ class TestSharkProtocolSuite(unittest.TestCase):
         forged_merge["digest"] = fm_digest
         forged_merge["ed25519_signature"] = engine.signer.sign_digest_hex(fm_digest)
 
-        ok_fm, msg_fm = SharkProtocolEngine.verify_chain_list(engine.ledger + [forged_merge])
+        ok_fm, msg_fm = SharkProtocolEngine.verify_chain_list(engine.ledger + [forged_merge], expected_pubkey=engine.public_key_hex)
         self.assertFalse(ok_fm)
         self.assertIn("unknown or unverified merge parent", msg_fm)
 
@@ -730,7 +750,9 @@ class TestSharkProtocolSuite(unittest.TestCase):
         self.assertGreater(cert["suppression_factor_lo"], 1e10)
         self.assertGreater(cert["critical_segment_growth_rate_mu_crit"], 20.0)
         self.assertEqual(cert["continuum_all_cutoff_status"], "OPEN")
-        self.assertEqual(vrk["claim_class"], "INTERVAL_CERTIFIED_RESULT")
+        self.assertEqual(vrk["claim_class"], "NUMERICAL_OBSERVATION")
+        self.assertEqual(cert["epistemic_status"], "ILLUSTRATIVE_PARAMETER_STUDY_GIVEN_ASSUMED_RATES")
+        self.assertEqual(cert["data_file_sha256"], WP19_SEGMENTS_EXPECTED_SHA256)
         ok, msg = engine.verify_ledger_integrity()
         self.assertTrue(ok, msg)
 
@@ -740,8 +762,228 @@ class TestSharkProtocolSuite(unittest.TestCase):
         report = engine.run_lifecycle_and_redteam_audit()
         self.assertTrue(report["track_a_mpmath_iv_200bit_certified"])
         self.assertTrue(report["track_b_isolated_signer_subprocess_verified"])
-        self.assertTrue(report["track_c_wp19_piecewise_duhamel_certified"])
+        self.assertTrue(report["track_c_wp19_parameter_study_evaluated"])
         self.assertTrue(report["all_checks_passed"])
+
+    def test_35_tasks_a_and_b_no_default_seed_pinned_verifier_signed_head_and_fsync(self) -> None:
+        """Tasks A & B: Refuses startup without seed; requires keyword-only expected_pubkey; rejects random/retired-seed forgeries & tail truncation."""
+        import tempfile
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+
+        # 1. Without SHARK_ED25519_SEED_HEX or explicit seed, signer/subprocess/engine refuse to start
+        os.environ.pop("SHARK_ED25519_SEED_HEX", None)
+        with self.assertRaises(RuntimeError):
+            Ed25519AuthoritySigner()
+        with self.assertRaises(RuntimeError):
+            IsolatedSignerSubprocess(generate_ephemeral=False)
+        with self.assertRaises(RuntimeError):
+            SharkProtocolEngine()
+
+        # IsolatedSignerSubprocess with generate_ephemeral=True generates key inside child process
+        with IsolatedSignerSubprocess(generate_ephemeral=True) as eph_signer:
+            self.assertIsNone(eph_signer._seed)
+            self.assertEqual(len(eph_signer.public_key_hex), 64)
+            d_test = hashlib.sha256(b"ephemeral_child_key").hexdigest()
+            sig_eph = eph_signer.sign_digest_hex(d_test)
+            self.assertTrue(Ed25519AuthoritySigner.verify_digest_signature(eph_signer.public_key_hex, d_test, sig_eph))
+
+        # Restore test-only seed
+        os.environ["SHARK_ED25519_SEED_HEX"] = UNTRUSTED_TEST_ONLY_SEED_HEX
+
+        # 2. verify_chain_list requires keyword-only expected_pubkey (no default)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger_file = pathlib.Path(tmpdir) / "ledger.jsonl"
+            engine = SharkProtocolEngine(ledger_path=ledger_file)
+            engine.seal_claim("claim.1", "First entry")
+            engine.seal_claim("claim.2", "Second entry")
+            self.assertTrue(ledger_file.exists())
+            disk_lines = [json.loads(line) for line in ledger_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(disk_lines), 2)
+
+            with self.assertRaises(TypeError):
+                SharkProtocolEngine.verify_chain_list(engine.ledger)  # type: ignore[call-arg]
+
+            # 3. Forgery signed with a random attacker key must be rejected
+            attacker_signer = Ed25519AuthoritySigner(seed=b"\x77" * 32)
+            forged_rand = dict(engine.ledger[-1])
+            forged_rand.pop("digest", None)
+            forged_rand.pop("ed25519_signature", None)
+            forged_rand["index"] = 3
+            forged_rand["prev_hash"] = engine.ledger[-1]["digest"]
+            forged_rand["parent_hashes"] = [engine.ledger[-1]["digest"]]
+            forged_rand["signer_pubkey"] = attacker_signer.public_key_hex
+            d_rand = sha256_canonical(forged_rand)
+            forged_rand["digest"] = d_rand
+            forged_rand["ed25519_signature"] = attacker_signer.sign_digest_hex(d_rand)
+
+            ok_r, msg_r = SharkProtocolEngine.verify_chain_list(
+                engine.ledger + [forged_rand], expected_pubkey=engine.public_key_hex
+            )
+            self.assertFalse(ok_r)
+            self.assertIn("signer_pubkey mismatch", msg_r)
+
+            # 4. Forgery signed with the retired v1.2.0 default seed must be rejected
+            retired_seed = hashlib.sha256(
+                b"shark_protocol_v1_2_0_default_ed25519_seed:" + VRK_TRUST_ROOT_DIGEST.encode("ascii")
+            ).digest()
+            self.assertEqual(hashlib.sha256(retired_seed).hexdigest(), RETIRED_V120_SEED_SHA256)
+            with self.assertRaises(ValueError):
+                Ed25519AuthoritySigner(seed=retired_seed)
+
+            raw_ret_priv = Ed25519PrivateKey.from_private_bytes(retired_seed)
+            ret_pub_hex = raw_ret_priv.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw
+            ).hex()
+            self.assertEqual(ret_pub_hex, RETIRED_V120_PUBKEY_HEX)
+            forged_ret = dict(forged_rand)
+            forged_ret.pop("digest", None)
+            forged_ret.pop("ed25519_signature", None)
+            forged_ret["signer_pubkey"] = ret_pub_hex
+            d_ret = sha256_canonical(forged_ret)
+            forged_ret["digest"] = d_ret
+            forged_ret["ed25519_signature"] = raw_ret_priv.sign(d_ret.encode("ascii")).hex()
+
+            ok_ret1, _ = SharkProtocolEngine.verify_chain_list(
+                engine.ledger + [forged_ret], expected_pubkey=engine.public_key_hex
+            )
+            self.assertFalse(ok_ret1)
+            ok_ret2, msg_ret2 = SharkProtocolEngine.verify_chain_list(
+                [forged_ret], expected_pubkey=RETIRED_V120_PUBKEY_HEX
+            )
+            self.assertFalse(ok_ret2)
+            self.assertIn("revoked", msg_ret2)
+
+            # 5. Signed head record verifies intact ledger and rejects tail truncation
+            head_rec = engine.sign_head_record()
+            ok_head, msg_head = SharkProtocolEngine.verify_chain_list(
+                engine.ledger, expected_pubkey=engine.public_key_hex, signed_head=head_rec
+            )
+            self.assertTrue(ok_head, msg_head)
+
+            ok_trunc, msg_trunc = SharkProtocolEngine.verify_chain_list(
+                engine.ledger[:-1], expected_pubkey=engine.public_key_hex, signed_head=head_rec
+            )
+            self.assertFalse(ok_trunc)
+            self.assertIn("truncation", msg_trunc)
+
+    def test_36_task_e_differential_lean_transition_table_vs_python_request_slot(self) -> None:
+        """Task E: Differential test comparing 200 random event traces across RequestSlot and data/lean_transition_table.json."""
+        import random
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        table_path = root / "data/lean_transition_table.json"
+        self.assertTrue(table_path.exists())
+        lean_table = json.loads(table_path.read_text(encoding="utf-8"))
+
+        # Confirm RequestSlot.is_zeroed has no setter (`ABORTED_POISONED` with `is_zeroed=True` is unreachable)
+        self.assertIsNone(RequestSlot.is_zeroed.fset)
+
+        all_states = list(LifecycleState)
+        all_events = list(LifecycleEvent)
+
+        # Exhaustive 6x5 single-step check
+        for st in all_states:
+            for ev in all_events:
+                slot = RequestSlot(slot_epoch=1, state=st)
+                next_py = slot.step_total_automaton(ev)
+                next_lean = LifecycleState(lean_table[st.value][ev.value])
+                self.assertEqual(next_py, next_lean, f"Mismatch on ({st}, {ev})")
+                self.assertEqual(slot.is_zeroed, (next_py == LifecycleState.ZEROED_FREED))
+
+        # 200 random multi-step traces of length 1..25
+        rng = random.Random(20261025)
+        for trace_idx in range(200):
+            init_st = rng.choice(all_states)
+            trace_len = rng.randint(1, 25)
+            events = [rng.choice(all_events) for _ in range(trace_len)]
+            slot = RequestSlot(slot_epoch=trace_idx + 1, state=init_st)
+            cur_lean = init_st.value
+            for ev in events:
+                cur_py = slot.step_total_automaton(ev).value
+                cur_lean = lean_table[cur_lean][ev.value]
+                self.assertEqual(cur_py, cur_lean)
+                self.assertEqual(slot.is_zeroed, (cur_py == "ZEROED_FREED"))
+
+    def test_37_task_d_axioms_check_all_41_theorems_and_output_parser(self) -> None:
+        """Task D: Verify lean/AxiomsCheck.lean covers all 41 theorems and tools/check_lean_axioms.py rejects sorryAx or custom axioms."""
+        import sys
+        root = pathlib.Path(__file__).resolve().parent.parent
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from tools.check_lean_axioms import (
+            discover_declared_theorems,
+            verify_axioms_check_source,
+            verify_lean_axioms_output,
+        )
+
+        expected_41 = verify_axioms_check_source(root)
+        self.assertEqual(len(expected_41), 41)
+        decl_map = discover_declared_theorems(root)
+        self.assertIn("perturbation_budget_scaling", decl_map["lean/TypestateLifecycle.lean"])
+        self.assertIn("projection_independent_of_secret", decl_map["lean/TypestateLifecycle.lean"])
+
+        # Construct a valid 41-theorem `#print axioms` transcript and verify parser acceptance
+        valid_lines = [
+            f"'{thm}' depends on axioms: [propext, Classical.choice, Quot.sound]"
+            for thm in expected_41
+        ]
+        parsed = verify_lean_axioms_output("\n".join(valid_lines), root)
+        self.assertEqual(len(parsed), 41)
+
+        # Injecting sorryAx or a custom axiom or dropping a theorem must fail
+        with self.assertRaises(AssertionError):
+            verify_lean_axioms_output("\n".join(valid_lines[:-1]), root)
+        with self.assertRaises(AssertionError):
+            verify_lean_axioms_output(valid_lines[0].replace("propext", "sorryAx") + "\n" + "\n".join(valid_lines[1:]), root)
+        with self.assertRaises(AssertionError):
+            verify_lean_axioms_output(valid_lines[0].replace("propext", "customUnverifiedAxiom") + "\n" + "\n".join(valid_lines[1:]), root)
+
+    def test_38_tasks_g_and_medium_empirical_attention_perturbation_token_tenant_and_rate_limit(self) -> None:
+        """Medium Findings: Empirical attention perturbation vs budget, token-bound HTTP tenant derivation, and HTTP 429 rate limiting."""
+        # 1. Empirical single-head scaled dot-product softmax attention perturbation on random weights
+        rng = np.random.default_rng(20261025)
+        comp = LRSCCompressor()
+        x_raw = rng.normal(0.0, 1.0, size=99)
+        x_unit = x_raw / max(float(np.linalg.norm(x_raw)), 1e-12)
+        # Small orthogonal perturbation within tau_null
+        noise = rng.normal(0.0, 0.005, size=x_unit.shape)
+        x_pert = x_unit + noise
+        delta_norm = float(np.linalg.norm(x_pert - x_unit))
+
+        # Reshape 99-vector into (n_tokens=9, d_model=11)
+        X1 = x_unit.reshape(9, 11)
+        X2 = x_pert.reshape(9, 11)
+        W_Q = rng.normal(0.0, 0.35, size=(11, 8))
+        W_K = rng.normal(0.0, 0.35, size=(11, 8))
+        W_V = rng.normal(0.0, 0.35, size=(11, 8))
+
+        def softmax_attn(X: np.ndarray) -> np.ndarray:
+            Q = X @ W_Q
+            K = X @ W_K
+            V = X @ W_V
+            scores = (Q @ K.T) / np.sqrt(8.0)
+            scores = scores - np.max(scores, axis=-1, keepdims=True)
+            weights = np.exp(scores)
+            weights = weights / np.sum(weights, axis=-1, keepdims=True)
+            return weights @ V
+
+        out1 = softmax_attn(X1)
+        out2 = softmax_attn(X2)
+        emp_diff = float(np.linalg.norm(out2 - out1))
+        # Local operator-norm budget L_local * ||Delta X||_F with L_local = 4.0 * ||W_Q||_2 * ||W_K||_2 * ||W_V||_2
+        L_local = 4.0 * float(np.linalg.norm(W_Q, 2) * np.linalg.norm(W_K, 2) * np.linalg.norm(W_V, 2) + np.linalg.norm(W_V, 2))
+        budget = L_local * delta_norm
+        self.assertLessEqual(emp_diff, budget)
+
+        # 2. Token-bound tenant derivation & per-tenant sliding-window rate limiting
+        gw = MultiProviderGateway(rate_limit_per_window=2, rate_limit_window_sec=60.0)
+        tok_tenant = gw.derive_tenant_from_token("secret_bearer_token_abc")
+        self.assertTrue(tok_tenant.startswith("t_"))
+        gw.process_request("Req 1", provider="groq", tenant_id=tok_tenant)
+        gw.process_request("Req 2", provider="groq", tenant_id=tok_tenant)
+        with self.assertRaises(GatewayRateLimitError):
+            gw.process_request("Req 3 exceeding rate limit", provider="groq", tenant_id=tok_tenant)
 
 
 if __name__ == "__main__":
