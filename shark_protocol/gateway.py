@@ -1,11 +1,12 @@
 """
 Layer 4: Fail-Closed Multi-Cloud Execution Gateway & Local Loopback HTTP Proxy (`shark_protocol/gateway.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Canonical DOI: 10.5281/zenodo.23624605
+Version: 1.2.0 (Zenodo v4 Final Edition | Lineage DOIs: 10.5281/zenodo.23624605, 10.5281/zenodo.23620074, 10.5281/zenodo.23618033)
 
 What Is and Is Not Verified in CI:
-- The deterministic local verification pipeline (`VRK_OFFLINE_SEALED_SIMULATION`) and local
-  loopback HTTP server (`127.0.0.1`) are exercised and verified in the automated test suite.
+- The deterministic local verification pipeline (`VRK_OFFLINE_SEALED_SIMULATION`), per-tenant
+  session isolation (`get_tenant_engine`), waking basal drive floor (`min_waking_p0 = 1.0`), and
+  local loopback HTTP server (`127.0.0.1`) are exercised and verified in the automated test suite.
 - External cloud provider dispatch (`LIVE_API_DISPATCH` across Groq, Together AI, Google Gemini,
   and Hugging Face) is an optional runtime integration interface requiring user-supplied API keys
   in `.env` and is not claimed as verified in offline CI runs.
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -62,13 +64,50 @@ class MultiProviderGateway:
     """
     Four-layer execution gateway binding every request to:
       1. Layer 1B: Thread-safe `WorkerEpochGuard` + `RequestSlot` typestate lifecycle
-      2. Layer 2 : 4D Soft-Wall ODE step (`step_ode` + `step_ode_patankar_interval`)
-      3. Layer 3 : LRSC 11/99 spectral compression (`LRSCCompressor` with null-space check)
+      2. Layer 2 : Per-tenant isolated 4D Soft-Wall ODE step with waking basal drive floor
+                   (`min_waking_p0 >= 1.0 >> P_crit = 10/99`, resolving Probe B saturation DoS)
+      3. Layer 3 : Bandlimited LRSC 11/99 spectral compression (`LRSCCompressor` with dual digest)
       4. Layer 1 : Append-only `intentseal-vrk-claim-v2` SHA-256 ledger seal
     """
 
-    def __init__(self, engine: Optional[SharkProtocolEngine] = None) -> None:
+    def __init__(
+        self,
+        engine: Optional[SharkProtocolEngine] = None,
+        min_waking_p0: float = 1.0,
+    ) -> None:
+        if min_waking_p0 < 10.0 / 99.0:
+            raise ValueError("min_waking_p0 must be >= P_crit = 10/99 to guarantee waking basin persistence.")
+        self.min_waking_p0 = float(min_waking_p0)
         self.engine = engine if engine is not None else SharkProtocolEngine()
+        self._gateway_lock = threading.RLock()
+        self._tenant_engines: Dict[str, SharkProtocolEngine] = {"default": self.engine}
+
+    def get_tenant_engine(self, tenant_id: str = "default") -> SharkProtocolEngine:
+        """Return an isolated `SharkProtocolEngine` for `tenant_id` (Probe B multi-tenant DoS guard)."""
+        norm_id = (tenant_id or "default").strip() or "default"
+        with self._gateway_lock:
+            if norm_id not in self._tenant_engines:
+                self._tenant_engines[norm_id] = SharkProtocolEngine(
+                    a=self.engine.a,
+                    b=self.engine.b,
+                    c=self.engine.c,
+                    e_gain=self.engine.e_gain,
+                    f=self.engine.f,
+                    g=self.engine.g,
+                    E_avail=self.engine.E_avail,
+                    I_erase=self.engine.I_erase,
+                    gamma_max=self.engine.gamma_max,
+                    H_max=self.engine.H_max,
+                    eps_H=self.engine.eps_H,
+                    eps_I=self.engine.eps_I,
+                    sigma_0=self.engine.sigma_0,
+                    mu_Psi=self.engine.mu_Psi,
+                    P_0=self.engine.P_0,
+                    lam_sim=self.engine.lam_sim,
+                    lam_lucid=self.engine.lam_lucid,
+                    kappa_meta=self.engine.kappa_meta,
+                )
+            return self._tenant_engines[norm_id]
 
     @staticmethod
     def _has_usable_key(env_var: str) -> Optional[str]:
@@ -118,6 +157,8 @@ class MultiProviderGateway:
         prompt: str,
         provider: str = "groq",
         simulate_oom_abort: bool = False,
+        tenant_id: str = "default",
+        requested_p0: Optional[float] = None,
     ) -> Dict[str, Any]:
         provider_norm = provider.strip().lower()
         if provider_norm not in SUPPORTED_PROVIDERS:
@@ -126,25 +167,41 @@ class MultiProviderGateway:
                 f"Supported providers: {sorted(SUPPORTED_PROVIDERS.keys())}."
             )
 
-        slot = self.engine.epoch_guard.begin_request()
+        target_engine = self.get_tenant_engine(tenant_id)
+        # Probe B Waking Basal Drive Floor: clamps any zero/negative P_0 request to >= min_waking_p0
+        raw_p0 = (1.0 + min(5.0, len(prompt) / 80.0)) if requested_p0 is None else float(requested_p0)
+        effective_p0 = max(self.min_waking_p0, min(6.0, raw_p0))
+
+        slot = target_engine.epoch_guard.begin_request()
         try:
             if simulate_oom_abort:
                 slot.transition(LifecycleEvent.OOM_ABORT)
                 raise TypestateViolationError("Simulated OOM abort during PARTIAL_INIT; request slot poisoned.")
 
-            ode_snapshot = self.engine.step_ode(dt=0.05)
-            lrsc_bundle = self.engine.lrsc.compress(prompt)
+            psi_before = float(target_engine.state[3])
+            ode_snapshot = target_engine.step_ode(dt=0.05, P_0=effective_p0)
+            separatrix_check = target_engine.evaluate_basin_separatrix_guard(
+                dt_window=0.05,
+                psi_before=psi_before,
+                psi_after=ode_snapshot["Psi"],
+                gamma_after=ode_snapshot["gamma"],
+                P_0=effective_p0,
+                enforce_cycle_basin=True,
+            )
+            lrsc_bundle = target_engine.lrsc.compress(prompt)
 
             slot.transition(
                 LifecycleEvent.SEAL_SUCCESS,
                 payload={
                     "prompt": prompt,
                     "provider": provider_norm,
+                    "tenant_id": tenant_id,
                     "lrsc_sha256": lrsc_bundle["lrsc_sha256"],
+                    "uncompressed_fallback_sha256": lrsc_bundle["uncompressed_fallback_sha256"],
                     "ode_snapshot": ode_snapshot,
                 },
             )
-            verified_payload = self.engine.epoch_guard.read_slot(slot)
+            verified_payload = target_engine.epoch_guard.read_slot(slot)
 
             # Determine whether live API dispatch is configured or offline simulation applies
             dispatch_mode = "VRK_OFFLINE_SEALED_SIMULATION"
@@ -168,18 +225,22 @@ class MultiProviderGateway:
                     except Exception:
                         continue
 
-            vrk_entry = self.engine.seal_claim(
-                claim_id=f"gateway.exec.epoch_{slot.slot_epoch}",
-                claim_text=f"4-layer verified gateway execution (mode={dispatch_mode}, provider={used_provider}).",
+            vrk_entry = target_engine.seal_claim(
+                claim_id=f"gateway.exec.{tenant_id}.epoch_{slot.slot_epoch}",
+                claim_text=f"4-layer verified gateway execution (mode={dispatch_mode}, provider={used_provider}, tenant={tenant_id}).",
                 claim_class="REPRODUCED_RESULT",
                 lrsc_digest=lrsc_bundle["lrsc_sha256"],
+                uncompressed_ring_digest=lrsc_bundle["uncompressed_fallback_sha256"],
             )
-            self.engine.epoch_guard.finish_request(slot, abort=False)
+            target_engine.epoch_guard.finish_request(slot, abort=False)
 
             return {
                 "status": "SEALED_OK",
                 "dispatch_mode": dispatch_mode,
                 "provider": used_provider,
+                "tenant_id": tenant_id,
+                "effective_p0": effective_p0,
+                "separatrix_guard": separatrix_check,
                 "worker_epoch": slot.slot_epoch,
                 "slot_final_state": slot.state.value,
                 "slot_fence_seq": slot.fence_seq,
@@ -189,7 +250,7 @@ class MultiProviderGateway:
                 "response": response_text,
             }
         except BaseException:
-            self.engine.epoch_guard.finish_request(slot, abort=True)
+            target_engine.epoch_guard.finish_request(slot, abort=True)
             raise
 
 
@@ -217,7 +278,7 @@ def create_gateway_http_server(
                 ok, detail = gw.engine.verify_ledger_integrity()
                 self._send_json(200, {
                     "status": "healthy" if ok else "degraded",
-                    "version": "1.1.2",
+                    "version": "1.2.0",
                     "doi": "10.5281/zenodo.23624605",
                     "vrk_chain_status": detail,
                     "ledger_length": len(gw.engine.ledger),
@@ -234,7 +295,8 @@ def create_gateway_http_server(
                     req_data = json.loads(body_bytes.decode("utf-8"))
                     prompt = str(req_data.get("prompt", ""))
                     provider = str(req_data.get("provider", "groq"))
-                    result = gw.process_request(prompt=prompt, provider=provider)
+                    tenant_id = str(req_data.get("tenant_id", "default"))
+                    result = gw.process_request(prompt=prompt, provider=provider, tenant_id=tenant_id)
                     self._send_json(200, result)
                 except GatewayConfigError as exc:
                     self._send_json(400, {"error": str(exc)})
@@ -249,7 +311,7 @@ def create_gateway_http_server(
 
 def run_http_gateway_server(host: str = "127.0.0.1", port: int = 8000) -> None:
     server, _ = create_gateway_http_server(host=host, port=port)
-    print(f"The Shark Protocol (v1.1.2) HTTP Security Gateway listening on http://{host}:{port}")
+    print(f"The Shark Protocol (v1.2.0) HTTP Security Gateway listening on http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

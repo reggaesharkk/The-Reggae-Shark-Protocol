@@ -1,28 +1,30 @@
 """
 Layer 1, Layer 1B, Layer 2, and Layer 3 Core Verification Kernel (`shark_protocol/kernel.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Canonical DOI: 10.5281/zenodo.23624605
+Version: 1.2.0 (Zenodo v4 Final Edition | Lineage DOIs: 10.5281/zenodo.23624605, 10.5281/zenodo.23620074, 10.5281/zenodo.23618033)
 
 What Is and Is Not Modelled (Epistemic Firewall):
 - Layer 1 (`SharkProtocolEngine`): Enforces the `intentseal-vrk-claim-v2` schema anchored at the
   frozen VRK v0.3.1 trust root (`f010a99d...05a0d0f`, DOI: 10.5281/zenodo.23018459) with both
-  linear `prev_hash` chaining and a commutative Merkle-DAG join-semilattice extension
-  (`parent_hashes` + `merge_divergent_ledgers`) for split-brain branch reconciliation.
+  linear `prev_hash` chaining and an N-way commutative, associative, and idempotent Merkle-DAG
+  join-semilattice (`leaf_frontier_tips` + `merge_divergent_ledgers`) for split-brain reconciliation.
 - Layer 1B (`RequestSlot` & `WorkerEpochGuard`): Formalizes an application-level request-lifecycle
   typestate automaton (`UNINIT -> PARTIAL_INIT -> SEALED_ACTIVE -> SHUTDOWN_CLEAN -> ZEROED_FREED`,
   with `OOM_ABORT -> ABORTED_POISONED`) and monotonic worker-epoch guard (`slot_epoch == worker_epoch`)
-  synchronized by a re-entrant thread lock (`threading.RLock`) and monotonic fence sequence counter
-  (`_fence_seq`). This rules out partial-initialization payload dereferencing and cross-epoch
-  worker-slot reads within the modelled Python state machine; it does not modify a native C/PHP
-  interpreter or OS ring-0 hardware page tables.
+  with private mutex-encapsulated `_state`, `_is_zeroed`, `_fence_seq`, and strict hierarchical lock
+  ordering (`WorkerEpochGuard._lock` -> `RequestSlot._lock`) safe for free-threaded Python (PEP 703 /
+  `--disable-gil`). It does not modify a native C/PHP interpreter or OS ring-0 hardware page tables.
 - Layer 2 (`step_ode`, `step_ode_patankar_interval`, `evaluate_basin_separatrix_guard`): Integrates
   the 4D soft-wall ODE system (gamma, H_obs, I_dot, Psi) from Program 08 (DOI: 10.5281/zenodo.23608244),
   pairing adaptive sub-stepped RK4 with an unconditionally box-invariant Patankar-Euler +
-  outward-rounded IEEE-754 interval enclosure and a fail-closed Gronwall separatrix floor guard.
+  outward-rounded IEEE-754 interval enclosure (with normal float64 subnormal/FTZ floor protection
+  `FLOAT64_NORMAL_MIN = 2.2250738585072014e-308`) and a fail-closed Gronwall separatrix floor guard.
 - Layer 3 (`LRSCCompressor`): Projects context onto the M=99 odd-ring near-Nyquist basis and
   retains the certified K=11 witness subset S_11 = {0,1,3,42..49} (11/99 = 1/9 ratio,
-  DOI: 10.17605/OSF.IO/NM5BW & 10.17605/OSF.IO/JAK5X), equipped with an orthogonal complement
-  (S_11^perp) energy anomaly detector and uncompressed SHA-256 fallback digest.
+  DOI: 10.17605/OSF.IO/NM5BW & 10.17605/OSF.IO/JAK5X), extracting both raw and bandlimited
+  odd-ring channel witnesses (`sigma_min = 0.18164624 > 0`), computing the downstream attention
+  Lipschitz error certificate, and binding both `lrsc_sha256` and `uncompressed_fallback_sha256`
+  into every VRK claim.
 """
 
 from __future__ import annotations
@@ -33,7 +35,6 @@ import hashlib
 import json
 import math
 import threading
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
@@ -41,6 +42,7 @@ import numpy as np
 
 
 VRK_TRUST_ROOT_DIGEST = "f010a99d78b360b8fd5dc9b727f21b898889c6e75e3093cc22d6f04d005a0d0f"
+FLOAT64_NORMAL_MIN: float = float(np.finfo(np.float64).tiny)  # 2.2250738585072014e-308
 
 REQUIRED_VRK_ROLES: Dict[str, frozenset[str]] = {
     "CONJECTURE": frozenset(),
@@ -100,56 +102,97 @@ class BasinCollapseError(RuntimeError):
     """Raised when an adversarial perturbation drives Psi(t) or P_eff(t) below the basin separatrix floor."""
 
 
-@dataclass
 class RequestSlot:
     """
     Thread-safe request slot enforcing the 6-state lifecycle typestate automaton
-    formalized in `lean/TypestateLifecycle.lean`, with an explicit re-entrant mutex
-    (`_lock`) and monotonic atomic memory-fence sequence counter (`_fence_seq`).
+    formalized in `lean/TypestateLifecycle.lean`.
+    Probe D Hardening (PEP 703 / `--disable-gil` Free-Threaded Python):
+    All mutable fields (`_state`, `_is_zeroed`, `_payload`, `_fence_seq`) are private and
+    exclusively accessed or mutated inside `with self._lock:` (`threading.RLock`), which
+    issues OS-level acquire-release memory fences even when the CPython GIL is disabled.
     """
-    slot_epoch: int
-    state: LifecycleState = LifecycleState.UNINIT
-    is_zeroed: bool = False
-    _payload: Optional[Dict[str, Any]] = field(default=None, repr=False)
-    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
-    _fence_seq: int = field(default=0, init=False)
+
+    def __init__(
+        self,
+        slot_epoch: int,
+        state: LifecycleState = LifecycleState.UNINIT,
+        is_zeroed: bool = False,
+    ) -> None:
+        self._lock = threading.RLock()
+        self._slot_epoch = int(slot_epoch)
+        self._state: LifecycleState = LifecycleState(state)
+        self._is_zeroed: bool = bool(is_zeroed)
+        self._payload: Optional[Dict[str, Any]] = None
+        self._fence_seq: int = 0
+
+    @property
+    def slot_epoch(self) -> int:
+        with self._lock:
+            return self._slot_epoch
+
+    @property
+    def state(self) -> LifecycleState:
+        with self._lock:
+            return self._state
+
+    @state.setter
+    def state(self, new_state: LifecycleState) -> None:
+        with self._lock:
+            self._state = LifecycleState(new_state)
+            self._fence_seq += 1
+
+    @property
+    def is_zeroed(self) -> bool:
+        with self._lock:
+            return self._is_zeroed
+
+    @is_zeroed.setter
+    def is_zeroed(self, val: bool) -> None:
+        with self._lock:
+            self._is_zeroed = bool(val)
+            self._fence_seq += 1
 
     @property
     def fence_seq(self) -> int:
         with self._lock:
             return self._fence_seq
 
+    def snapshot(self) -> Tuple[int, LifecycleState, bool, int]:
+        """Return a single lock-consistent atomic tuple `(slot_epoch, state, is_zeroed, fence_seq)`."""
+        with self._lock:
+            return (self._slot_epoch, self._state, self._is_zeroed, self._fence_seq)
+
     def transition(self, event: LifecycleEvent, payload: Optional[Dict[str, Any]] = None) -> LifecycleState:
         with self._lock:
-            if self.state == LifecycleState.UNINIT and event == LifecycleEvent.BEGIN_INIT:
-                self.state = LifecycleState.PARTIAL_INIT
+            if self._state == LifecycleState.UNINIT and event == LifecycleEvent.BEGIN_INIT:
+                self._state = LifecycleState.PARTIAL_INIT
                 self._payload = None
-            elif self.state == LifecycleState.PARTIAL_INIT and event == LifecycleEvent.SEAL_SUCCESS:
+            elif self._state == LifecycleState.PARTIAL_INIT and event == LifecycleEvent.SEAL_SUCCESS:
                 if payload is None:
-                    self.state = LifecycleState.ABORTED_POISONED
+                    self._state = LifecycleState.ABORTED_POISONED
                     self._payload = None
                     self._fence_seq += 1
                     raise TypestateViolationError("Cannot transition to SEALED_ACTIVE with None payload.")
-                self.state = LifecycleState.SEALED_ACTIVE
+                self._state = LifecycleState.SEALED_ACTIVE
                 self._payload = dict(payload)
-            elif self.state in (LifecycleState.PARTIAL_INIT, LifecycleState.SEALED_ACTIVE) and event == LifecycleEvent.OOM_ABORT:
+            elif self._state in (LifecycleState.PARTIAL_INIT, LifecycleState.SEALED_ACTIVE) and event == LifecycleEvent.OOM_ABORT:
                 self._payload = None
-                self.state = LifecycleState.ABORTED_POISONED
-            elif self.state == LifecycleState.SEALED_ACTIVE and event == LifecycleEvent.NORMAL_CLOSE:
-                self.state = LifecycleState.SHUTDOWN_CLEAN
-            elif self.state in (LifecycleState.SHUTDOWN_CLEAN, LifecycleState.ABORTED_POISONED) and event == LifecycleEvent.ZERO_AND_FREE:
+                self._state = LifecycleState.ABORTED_POISONED
+            elif self._state == LifecycleState.SEALED_ACTIVE and event == LifecycleEvent.NORMAL_CLOSE:
+                self._state = LifecycleState.SHUTDOWN_CLEAN
+            elif self._state in (LifecycleState.SHUTDOWN_CLEAN, LifecycleState.ABORTED_POISONED) and event == LifecycleEvent.ZERO_AND_FREE:
                 self._payload = None
-                self.is_zeroed = True
-                self.state = LifecycleState.ZEROED_FREED
+                self._is_zeroed = True
+                self._state = LifecycleState.ZEROED_FREED
             else:
                 self._payload = None
-                self.state = LifecycleState.ABORTED_POISONED
+                self._state = LifecycleState.ABORTED_POISONED
                 self._fence_seq += 1
                 raise TypestateViolationError(
-                    f"Illegal typestate transition from {self.state.value} on event {event.value}; slot poisoned."
+                    f"Illegal typestate transition from {self._state.value} on event {event.value}; slot poisoned."
                 )
             self._fence_seq += 1
-            return self.state
+            return self._state
 
     @contextlib.contextmanager
     def atomic_lifecycle_scope(self, initial_payload: Dict[str, Any]) -> Iterator["RequestSlot"]:
@@ -164,41 +207,41 @@ class RequestSlot:
                 self.transition(LifecycleEvent.SEAL_SUCCESS, payload=initial_payload)
             except BaseException:
                 self._payload = None
-                self.state = LifecycleState.ABORTED_POISONED
-                self.is_zeroed = True
+                self._state = LifecycleState.ABORTED_POISONED
+                self._is_zeroed = True
                 self._fence_seq += 1
                 raise
         try:
             yield self
             with self._lock:
-                if self.state == LifecycleState.SEALED_ACTIVE:
+                if self._state == LifecycleState.SEALED_ACTIVE:
                     self.run_clean_destructor()
                     self.transition(LifecycleEvent.ZERO_AND_FREE)
         except BaseException:
             with self._lock:
                 self._payload = None
-                if self.state in (LifecycleState.PARTIAL_INIT, LifecycleState.SEALED_ACTIVE):
+                if self._state in (LifecycleState.PARTIAL_INIT, LifecycleState.SEALED_ACTIVE):
                     self.transition(LifecycleEvent.OOM_ABORT)
                 else:
-                    self.state = LifecycleState.ABORTED_POISONED
+                    self._state = LifecycleState.ABORTED_POISONED
                 self.transition(LifecycleEvent.ZERO_AND_FREE)
             raise
 
     def dereference_payload(self) -> Dict[str, Any]:
         with self._lock:
-            if self.state != LifecycleState.SEALED_ACTIVE or self.is_zeroed or self._payload is None:
+            if self._state != LifecycleState.SEALED_ACTIVE or self._is_zeroed or self._payload is None:
                 raise TypestateViolationError(
-                    f"Typestate guard: payload dereference blocked in state {self.state.value}."
+                    f"Typestate guard: payload dereference blocked in state {self._state.value}."
                 )
             return dict(self._payload)
 
     def run_clean_destructor(self) -> bool:
         with self._lock:
-            if self.state == LifecycleState.SEALED_ACTIVE:
+            if self._state == LifecycleState.SEALED_ACTIVE:
                 self.transition(LifecycleEvent.NORMAL_CLOSE)
-            if self.state != LifecycleState.SHUTDOWN_CLEAN:
+            if self._state != LifecycleState.SHUTDOWN_CLEAN:
                 raise TypestateViolationError(
-                    f"Typestate guard: clean destructor blocked on state {self.state.value} (use-after-free/abort prevented)."
+                    f"Typestate guard: clean destructor blocked on state {self._state.value} (use-after-free/abort prevented)."
                 )
             self._payload = None
             self._fence_seq += 1
@@ -208,6 +251,8 @@ class RequestSlot:
 class WorkerEpochGuard:
     """
     Thread-safe monotonic worker-epoch isolator (`lean/TypestateLifecycle.lean`: `stale_epoch_read_rejected`).
+    Enforces strict hierarchical lock ordering (`WorkerEpochGuard._lock` -> `RequestSlot._lock`)
+    for free-threaded Python (`--disable-gil` / PEP 703) sequential consistency.
     """
 
     def __init__(self, initial_epoch: int = 1) -> None:
@@ -224,8 +269,10 @@ class WorkerEpochGuard:
 
     def begin_request(self) -> RequestSlot:
         with self._lock:
-            if self._active_slot is not None and self._active_slot.state != LifecycleState.ZEROED_FREED:
-                self._retire_active_slot()
+            if self._active_slot is not None:
+                _, act_state, _, _ = self._active_slot.snapshot()
+                if act_state != LifecycleState.ZEROED_FREED:
+                    self._retire_active_slot()
             self._worker_epoch += 1
             slot = RequestSlot(slot_epoch=self._worker_epoch)
             slot.transition(LifecycleEvent.BEGIN_INIT)
@@ -234,45 +281,57 @@ class WorkerEpochGuard:
 
     def read_slot(self, slot: RequestSlot) -> Dict[str, Any]:
         with self._lock:
-            if slot.slot_epoch != self._worker_epoch:
-                raise StaleWorkerEpochError(
-                    f"Epoch isolation guard: worker at epoch {self._worker_epoch} rejected stale slot from epoch {slot.slot_epoch}."
-                )
-            if slot.is_zeroed or slot.state != LifecycleState.SEALED_ACTIVE:
-                raise TypestateViolationError(
-                    f"Epoch isolation guard: slot in state {slot.state.value} (is_zeroed={slot.is_zeroed}) cannot be read."
-                )
-            return slot.dereference_payload()
+            with slot._lock:
+                slot_ep, slot_st, slot_zeroed, _ = slot.snapshot()
+                if slot_ep != self._worker_epoch:
+                    raise StaleWorkerEpochError(
+                        f"Epoch isolation guard: worker at epoch {self._worker_epoch} rejected stale slot from epoch {slot_ep}."
+                    )
+                if slot_zeroed or slot_st != LifecycleState.SEALED_ACTIVE:
+                    raise TypestateViolationError(
+                        f"Epoch isolation guard: slot in state {slot_st.value} (is_zeroed={slot_zeroed}) cannot be read."
+                    )
+                return slot.dereference_payload()
 
     def finish_request(self, slot: RequestSlot, abort: bool = False) -> None:
         with self._lock:
-            if abort:
-                if slot.state in (LifecycleState.PARTIAL_INIT, LifecycleState.SEALED_ACTIVE):
-                    slot.transition(LifecycleEvent.OOM_ABORT)
-            else:
-                if slot.state == LifecycleState.SEALED_ACTIVE:
-                    slot.run_clean_destructor()
-            if slot.state in (LifecycleState.SHUTDOWN_CLEAN, LifecycleState.ABORTED_POISONED):
-                slot.transition(LifecycleEvent.ZERO_AND_FREE)
+            with slot._lock:
+                if abort:
+                    if slot.state in (LifecycleState.PARTIAL_INIT, LifecycleState.SEALED_ACTIVE):
+                        slot.transition(LifecycleEvent.OOM_ABORT)
+                else:
+                    if slot.state == LifecycleState.SEALED_ACTIVE:
+                        slot.run_clean_destructor()
+                if slot.state in (LifecycleState.SHUTDOWN_CLEAN, LifecycleState.ABORTED_POISONED):
+                    slot.transition(LifecycleEvent.ZERO_AND_FREE)
 
     def _retire_active_slot(self) -> None:
         with self._lock:
             slot = self._active_slot
             if slot is None:
                 return
-            if slot.state in (LifecycleState.PARTIAL_INIT, LifecycleState.SEALED_ACTIVE):
-                slot.transition(LifecycleEvent.OOM_ABORT)
-            if slot.state in (LifecycleState.SHUTDOWN_CLEAN, LifecycleState.ABORTED_POISONED):
-                slot.transition(LifecycleEvent.ZERO_AND_FREE)
+            with slot._lock:
+                if slot.state in (LifecycleState.PARTIAL_INIT, LifecycleState.SEALED_ACTIVE):
+                    slot.transition(LifecycleEvent.OOM_ABORT)
+                if slot.state in (LifecycleState.SHUTDOWN_CLEAN, LifecycleState.ABORTED_POISONED):
+                    slot.transition(LifecycleEvent.ZERO_AND_FREE)
 
 
 class LRSCCompressor:
     """
     Layer 3: Low-Rank Spectral Context Memory (LRSC 11/99 = 1/9).
     Implements the odd-ring near-Nyquist cyclic projection (M=99, K=11) from
-    Program 04 (DOI: 10.17605/OSF.IO/NM5BW and DOI: 10.17605/OSF.IO/JAK5X),
-    extended with an orthogonal null-space (S_11^perp) adversarial energy detector
-    and uncompressed SHA-256 fallback digest (Red-Team Problem 3).
+    Program 04 (DOI: 10.17605/OSF.IO/NM5BW and DOI: 10.17605/OSF.IO/JAK5X).
+    Probe C Hardening:
+    1. Computes both the raw orthogonal energy ratio `eta_perp_raw` and the bandlimited
+       odd-ring channel projection `bandlimited = V_ring @ normalized_ring`.
+    2. Extracts the bandlimited K=11 witness vector on `Im(V_ring)`, where the restricted
+       witness projection has strictly positive minimum singular value `sigma_min = 0.18164624 > 0`.
+    3. Computes the exact downstream scaled dot-product attention Lipschitz error bound
+       `attention_lipschitz_error_bound = L_W * (1 + 2 * L_W^2 / sqrt(d_k)) * eta_perp`
+       (backed by Lean 4 Theorem 10 `lrsc_attention_lipschitz_error_bound`).
+    4. Always computes and returns both `lrsc_sha256` and `uncompressed_fallback_sha256`
+       so every VRK claim record permanently binds both digests.
     """
     M_RING: int = 99
     K_WITNESS: int = 11
@@ -281,8 +340,19 @@ class LRSCCompressor:
     THETA: float = 0.08
     AMPLITUDE: float = 0.50
 
-    def __init__(self, null_space_threshold: float = 0.92) -> None:
+    def __init__(
+        self,
+        null_space_threshold: float = 0.92,
+        attn_weight_norm: float = 1.0,
+        attn_head_dim: int = 64,
+    ) -> None:
         self.null_space_threshold = float(null_space_threshold)
+        self.attn_weight_norm = float(attn_weight_norm)
+        self.attn_head_dim = int(attn_head_dim)
+        self.attn_lipschitz_constant = self.attn_weight_norm * (
+            1.0 + (2.0 * (self.attn_weight_norm ** 2)) / math.sqrt(float(self.attn_head_dim))
+        )
+
         m = np.arange(self.M_RING, dtype=np.float64)
         self.envelope = 1.0 + self.AMPLITUDE * np.cos(
             2.0 * math.pi * self.K_NYQUIST * m / self.M_RING + self.THETA
@@ -293,6 +363,11 @@ class LRSCCompressor:
             1.0 + 2.0 * np.cos(angles) + 2.0 * np.cos(3.0 * angles)
             + 2.0 * np.cos(self.K_NYQUIST * angles)
         )
+        # Precompute minimum singular value of S_11 restricted to the odd-ring filter subspace
+        eigvals, eigvecs = np.linalg.eigh(self.ring_filter)
+        basis_sub = eigvecs[:, eigvals > 1e-10]
+        svals = np.linalg.svd(basis_sub[list(self.WITNESS_INDICES), :], compute_uv=False)
+        self.channel_witness_sigma_min = float(np.min(svals))
 
     def compress(
         self,
@@ -330,11 +405,19 @@ class LRSCCompressor:
         witness_energy = float(np.linalg.norm(witness_vec))
         null_space_ratio = float(np.linalg.norm(orth_vec))
 
-        # Bandlimited odd-ring channel projection (rank-41 subspace)
-        bandlimited = self.ring_filter @ normalized_ring
-        bl_norm = float(np.linalg.norm(bandlimited))
+        # Bandlimited odd-ring channel projection & witness extraction (Probe C hardening)
+        bandlimited_raw = self.ring_filter @ normalized_ring
+        out_of_channel_residual = float(np.linalg.norm(normalized_ring - bandlimited_raw))
+        bl_norm = float(np.linalg.norm(bandlimited_raw))
         if bl_norm > 0.0:
-            bandlimited = bandlimited / bl_norm
+            bandlimited = bandlimited_raw / bl_norm
+        else:
+            bandlimited = bandlimited_raw
+        bandlimited_witness_vec = [round(float(x), 8) for x in bandlimited[witness_idx]]
+
+        # Exact Lipschitz upper bound on downstream attention perturbation (Theorem 10)
+        attn_error_bound = float(self.attn_lipschitz_constant * null_space_ratio)
+        attn_error_ceiling = float(self.attn_lipschitz_constant * self.null_space_threshold)
 
         null_space_anomaly = bool(null_space_ratio > self.null_space_threshold)
         rounded_witness = [round(float(x), 8) for x in witness_vec]
@@ -345,6 +428,7 @@ class LRSCCompressor:
             "K": self.K_WITNESS,
             "indices": witness_idx,
             "witness": rounded_witness,
+            "bandlimited_witness": bandlimited_witness_vec,
         })
         uncompressed_sha256 = sha256_canonical({
             "M": self.M_RING,
@@ -358,10 +442,16 @@ class LRSCCompressor:
             "compression_ratio_exact": "11/99",
             "witness_indices": witness_idx,
             "witness_vector": rounded_witness,
+            "bandlimited_witness_vector": bandlimited_witness_vec,
+            "channel_witness_sigma_min": round(self.channel_witness_sigma_min, 8),
+            "out_of_channel_l2_residual": round(out_of_channel_residual, 8),
             "witness_l2_norm": round(witness_energy, 8),
             "orthogonal_null_space_l2_ratio": round(null_space_ratio, 8),
+            "attention_lipschitz_constant": round(self.attn_lipschitz_constant, 8),
+            "attention_perturbation_upper_bound": round(attn_error_bound, 8),
+            "attention_perturbation_threshold_ceiling": round(attn_error_ceiling, 8),
             "null_space_anomaly_detected": null_space_anomaly,
-            "fallback_mode": "UNCOMPRESSED_FULL_RING_SEAL" if null_space_anomaly else "CERTIFIED_K11_WITNESS",
+            "fallback_mode": "UNCOMPRESSED_FULL_RING_SEAL" if null_space_anomaly else "CERTIFIED_K11_DUAL_SEAL",
             "lrsc_sha256": lrsc_sha256,
             "uncompressed_fallback_sha256": uncompressed_sha256,
         }
@@ -369,10 +459,10 @@ class LRSCCompressor:
 
 class SharkProtocolEngine:
     """
-    Layer 1 (VRK v0.3.1 SHA-256 Hash-Chained & Merkle-DAG Provenance Ledger),
+    Layer 1 (VRK v0.3.1 SHA-256 Hash-Chained & N-Way Associative Merkle-DAG Provenance Ledger),
     Layer 1B (Typestate & Epoch Guard), Layer 2 (4D Soft-Wall ODE Governor with
-    Patankar-Euler Interval Enclosure & Basin Separatrix Floor Guard), and
-    Layer 3 (LRSC 11/99 Spectral Compressor).
+    Subnormal-Safe Patankar-Euler Interval Enclosure & Basin Separatrix Floor Guard), and
+    Layer 3 (Bandlimited LRSC 11/99 Spectral Compressor).
     """
 
     def __init__(
@@ -463,6 +553,8 @@ class SharkProtocolEngine:
 
     def assert_inside_box_b4(self, y: Optional[Sequence[float]] = None, P_0: Optional[float] = None) -> bool:
         vec = self.state if y is None else np.asarray(y, dtype=np.float64)
+        if not bool(np.all(np.isfinite(vec))):
+            raise RuntimeError("Non-finite IEEE-754 value (NaN or Inf) detected in state vector.")
         gamma, H_obs, I_dot, Psi = float(vec[0]), float(vec[1]), float(vec[2]), float(vec[3])
         i_max = self.compute_i_max_4d(P_0=P_0)
         tol = 1e-12
@@ -528,12 +620,12 @@ class SharkProtocolEngine:
         P_0: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        Red-Team Problem 1 Solution: Unconditionally box-invariant Patankar-Euler fractional
-        production-destruction update coupled with outward-rounded IEEE-754 interval enclosures
-        (`[lo, hi]` padded by 2 ULPs via `np.nextafter`).
-        By Theorem 6 (`patankar_euler_step_in_box` in `lean/TypestateLifecycle.lean`),
-        each coordinate update `x_new = (x + dt * P * x_max) / (1 + dt * (P + D))`
-        stays strictly inside `[0, x_max]` for ALL `dt > 0` without truncation overshoot.
+        Red-Team Problem 1 + Deep Probe A Solution:
+        Unconditionally box-invariant Patankar-Euler fractional production-destruction update
+        coupled with outward-rounded IEEE-754 interval enclosures (`[lo, hi]`) and explicit
+        normal float64 subnormal/Flush-To-Zero (FTZ) lower-floor trapping (`FLOAT64_NORMAL_MIN`).
+        Backed by Lean 4 Theorem 6 (`patankar_euler_step_in_box`) and Theorem 9
+        (`patankar_strict_positivity_floor` in `lean/TypestateLifecycle.lean`).
         """
         with self._lock:
             if dt <= 0.0:
@@ -547,11 +639,18 @@ class SharkProtocolEngine:
             n_sub = max(20, int(math.ceil(dt / 0.0005)))
             h = dt / float(n_sub)
 
-            y_lo = self.state.copy()
-            y_hi = self.state.copy()
+            y_lo = np.maximum(0.0, self.state.copy().astype(np.float64))
+            y_hi = self.state.copy().astype(np.float64)
+            ceilings = np.array([self.gamma_max, self.H_max, i_max, 1.0], dtype=np.float64)
+            y_hi = np.minimum(ceilings, y_hi)
+
+            # Track whether any coordinate had strictly positive initial value or production
+            strictly_positive_mask = (y_lo > 0.0) | np.array([p0 > 0.0, False, p0 > 0.0, False])
 
             for _ in range(n_sub):
                 y_mid = 0.5 * (y_lo + y_hi)
+                # Guard against subnormal FTZ underflow before evaluating rates
+                y_mid = np.where(strictly_positive_mask & (y_mid < FLOAT64_NORMAL_MIN), FLOAT64_NORMAL_MIN, y_mid)
                 gamma, H_obs, I_dot, Psi = [float(v) for v in y_mid]
 
                 # 1. gamma in [0, gamma_max]: dgamma/dt = a*I_dot*E_avail*(1 - gamma/gamma_max) - b*gamma
@@ -582,11 +681,16 @@ class SharkProtocolEngine:
                 D_psi = self.mu_Psi
                 Psi_next = (Psi + h * P_psi * 1.0) / (1.0 + h * (P_psi + D_psi))
 
+                prod_rates = np.array([P_g, P_H, P_I, P_psi], dtype=np.float64)
+                strictly_positive_mask = strictly_positive_mask | (prod_rates > 0.0)
+
                 nxt = np.array([g_next, H_next, I_next, Psi_next], dtype=np.float64)
-                # Outward 2-ULP IEEE-754 interval rounding bounded by proven Patankar box [0, x_max]
-                ceilings = np.array([self.gamma_max, self.H_max, i_max, 1.0], dtype=np.float64)
-                y_lo = np.maximum(0.0, np.nextafter(nxt, -np.inf))
-                y_hi = np.minimum(ceilings, np.nextafter(nxt, np.inf))
+                # Outward 2-ULP IEEE-754 interval rounding with normal float64 floor trap (Probe A)
+                raw_lo = np.nextafter(np.nextafter(nxt, -np.inf), -np.inf)
+                raw_hi = np.nextafter(np.nextafter(nxt, np.inf), np.inf)
+                floor_vec = np.where(strictly_positive_mask, FLOAT64_NORMAL_MIN, 0.0)
+                y_lo = np.minimum(ceilings, np.maximum(floor_vec, raw_lo))
+                y_hi = np.minimum(ceilings, np.maximum(y_lo, raw_hi))
 
             self.state = 0.5 * (y_lo + y_hi)
             self.time_t += dt
@@ -599,6 +703,8 @@ class SharkProtocolEngine:
                 "state_mid": [float(v) for v in self.state],
                 "interval_lo": [float(v) for v in y_lo],
                 "interval_hi": [float(v) for v in y_hi],
+                "strictly_positive_normal_floored": [bool(v) for v in strictly_positive_mask],
+                "float64_normal_min": FLOAT64_NORMAL_MIN,
                 "max_interval_width": max_width,
                 "I_max_4D": float(i_max),
                 "substeps": n_sub,
@@ -615,10 +721,10 @@ class SharkProtocolEngine:
         enforce_cycle_basin: bool = True,
     ) -> Dict[str, Any]:
         """
-        Red-Team Problem 2 Solution: Enforces the analytic Gronwall capacitive decay floor
+        Red-Team Problem 2 + Probe B Solution: Enforces the analytic Gronwall capacitive decay floor
         `Psi(t + dt) >= Psi(t) * exp(-mu_Psi * dt)` (`lean/TypestateLifecycle.lean`:
         `psi_decay_floor_bound`) and checks whether the trajectory remains above the
-        P_0 = 0 cycle-persistence separatrix threshold (`P_eff >= P_eff_separatrix_floor = 0.058`).
+        P_0 = 0 cycle-persistence separatrix threshold (`P_eff >= P_eff_separatrix_floor`).
         Raises `BasinCollapseError` (fail-closed) if an adversarial state injection violates
         either bound.
         """
@@ -694,13 +800,14 @@ class SharkProtocolEngine:
         does_not_imply: Optional[List[str]] = None,
         evidence: Optional[List[Dict[str, str]]] = None,
         lrsc_digest: Optional[str] = None,
+        uncompressed_ring_digest: Optional[str] = None,
         timestamp_utc: Optional[str] = None,
         parent_hashes: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Seal a claim into the append-only VRK v0.3.1 ledger (`intentseal-vrk-claim-v2`),
-        supporting both linear `prev_hash` chaining and canonically sorted `parent_hashes`
-        for Merkle-DAG branch reconciliation.
+        binding both `lrsc_sha256` and `uncompressed_ring_sha256` (Probe C dual seal) and
+        supporting both linear `prev_hash` chaining and canonically sorted `parent_hashes`.
         """
         with self._lock:
             if claim_class not in REQUIRED_VRK_ROLES:
@@ -769,6 +876,7 @@ class SharkProtocolEngine:
                 },
                 "evidence": ev_list,
                 "lrsc_sha256": lrsc_digest or "none",
+                "uncompressed_ring_sha256": uncompressed_ring_digest or "none",
                 "ode_state_snapshot": [round(float(v), 8) for v in self.state],
             }
             digest = sha256_canonical(record_body)
@@ -797,10 +905,11 @@ class SharkProtocolEngine:
             parents = entry.get("parent_hashes", [entry.get("prev_hash", "")])
             if not parents or parents != sorted(parents):
                 return False, f"Entry {idx} has unsorted or empty parent_hashes."
-            if len(parents) == 1 and entry.get("prev_hash") != expected_prev:
+            is_merkle_merge = "merged_claim_digests" in entry
+            if len(parents) == 1 and not is_merkle_merge and entry.get("prev_hash") != expected_prev:
                 return False, f"Entry {idx} prev_hash mismatch."
             for p_hash in parents:
-                if p_hash not in known_digests and len(parents) == 1:
+                if p_hash not in known_digests and len(parents) == 1 and not is_merkle_merge:
                     return False, f"Entry {idx} references unknown parent {p_hash}."
 
             body = {k: v for k, v in entry.items() if k != "digest"}
@@ -819,68 +928,90 @@ class SharkProtocolEngine:
         cls,
         branch_a: Sequence[Dict[str, Any]],
         branch_b: Sequence[Dict[str, Any]],
-        merge_timestamp_utc: str = "2026-10-24T00:00:00Z",
+        *extra_branches: Sequence[Dict[str, Any]],
+        merge_timestamp_utc: str = "2026-10-25T00:00:00Z",
     ) -> Dict[str, Any]:
         """
-        Red-Team Problem 5 Solution: Commutative Merkle-DAG Join-Semilattice Reconciliation
-        for distributed split-brain gateway branches (`lean/TypestateLifecycle.lean`:
-        `merkle_dag_merge_commutative`).
-        1. Independently validates both `branch_a` and `branch_b` (fail-closed if either branch
-           contains a tampered digest, broken `prev_hash`, or invalid VRK schema).
-        2. Identifies common ancestor digests and computes a canonical, arrival-order-independent
-           Merkle-DAG merge claim with `parent_hashes = sorted([tip_a, tip_b])`.
+        Red-Team Problem 5 + Deep Probe E Solution:
+        N-Way Commutative, Associative, and Idempotent Merkle-DAG Join-Semilattice Reconciliation
+        (`lean/TypestateLifecycle.lean`: `merkle_dag_merge_commutative` & `merkle_dag_semilattice_laws`).
+        1. Validates every input branch (`branch_a`, `branch_b`, and any `*extra_branches`) fail-closed.
+        2. Extracts the canonical set of leaf frontier tips (`leaf_frontier_tips`) and non-merge base
+           claims (`merged_claim_digests`, `merged_claim_ids`) across all input branches, flattening any
+           intermediate Merkle-DAG merge nodes into their constituent leaf tips and base claims.
+        3. Because set union is commutative (A u B = B u A), associative ((A u B) u C = A u (B u C)),
+           and idempotent (A u A = A), sequential pairwise merges `merge([merge(A, B)], C)` and
+           `merge(A, [merge(B, C)])` and N-way `merge(A, B, C)` produce the exact same canonical JSON
+           record and the exact same 64-hex SHA-256 `digest`.
         """
-        if not branch_a or not branch_b:
-            raise ValueError("Both branches must be non-empty to merge.")
-        ok_a, reason_a = cls.verify_chain_list(branch_a)
-        if not ok_a:
-            raise RuntimeError(f"Split-brain merge rejected: branch_a invalid ({reason_a})")
-        ok_b, reason_b = cls.verify_chain_list(branch_b)
-        if not ok_b:
-            raise RuntimeError(f"Split-brain merge rejected: branch_b invalid ({reason_b})")
+        all_branches = [branch_a, branch_b] + list(extra_branches)
+        for b_idx, br in enumerate(all_branches):
+            if not br:
+                raise ValueError(f"Branch {b_idx} must be non-empty to merge.")
+            ok, reason = cls.verify_chain_list(br)
+            if not ok:
+                raise RuntimeError(f"Split-brain merge rejected: branch {b_idx} invalid ({reason})")
 
-        tip_a = branch_a[-1]["digest"]
-        tip_b = branch_b[-1]["digest"]
-        parents_sorted = sorted({tip_a, tip_b})
+        leaf_tips_set: set[str] = set()
+        claim_digests_set: set[str] = set()
+        claim_ids_set: set[str] = set()
 
-        # Canonical union of all verified claim digests across both branches
-        all_digests_sorted = sorted({e["digest"] for e in branch_a} | {e["digest"] for e in branch_b})
-        all_claim_ids_sorted = sorted({e["claim_id"] for e in branch_a} | {e["claim_id"] for e in branch_b})
+        for br in all_branches:
+            tip_entry = br[-1]
+            if "leaf_frontier_tips" in tip_entry and "merged_claim_digests" in tip_entry:
+                leaf_tips_set.update(str(x) for x in tip_entry["leaf_frontier_tips"])
+            else:
+                leaf_tips_set.add(str(tip_entry["digest"]))
+
+            for entry in br:
+                if "merged_claim_digests" in entry and "merged_claim_ids" in entry:
+                    claim_digests_set.update(str(x) for x in entry["merged_claim_digests"])
+                    claim_ids_set.update(str(x) for x in entry["merged_claim_ids"])
+                else:
+                    claim_digests_set.add(str(entry["digest"]))
+                    claim_ids_set.add(str(entry["claim_id"]))
+
+        parents_sorted = sorted(leaf_tips_set)
+        all_digests_sorted = sorted(claim_digests_set)
+        all_claim_ids_sorted = sorted(claim_ids_set)
+        frontier_root = sha256_canonical(parents_sorted)
 
         merge_body: Dict[str, Any] = {
             "schema": "intentseal-vrk-claim-v2",
             "index": len(all_digests_sorted) + 1,
             "prev_hash": parents_sorted[0],
             "parent_hashes": parents_sorted,
+            "leaf_frontier_tips": parents_sorted,
             "trust_root": VRK_TRUST_ROOT_DIGEST,
             "timestamp_utc": merge_timestamp_utc,
-            "claim_id": f"vrk.merkle_dag.merge.{parents_sorted[0][:8]}_{parents_sorted[-1][:8]}",
-            "claim_text": f"Deterministic Merkle-DAG join-semilattice reconciliation of {len(all_digests_sorted)} verified claims.",
+            "claim_id": f"vrk.merkle_dag.merge.{frontier_root[:16]}",
+            "claim_text": f"Deterministic N-way associative Merkle-DAG join-semilattice reconciliation of {len(all_digests_sorted)} verified claims across {len(parents_sorted)} frontier tip(s).",
             "claim_class": "REPRODUCED_RESULT",
             "sealed": True,
             "scope": {
                 "applies_to": [
-                    "Commutative Merkle-DAG reconciliation of divergent VRK gateway ledger branches",
+                    "Commutative, associative, and idempotent Merkle-DAG reconciliation of divergent VRK gateway ledger branches",
                 ],
                 "does_not_imply": [
                     "Byzantine fault tolerance against dishonest majority signers without external PKI signatures",
                 ],
             },
             "evidence": [
-                {"role": "definition", "path": "lean/TypestateLifecycle.lean#merkle_dag_merge_commutative"},
+                {"role": "definition", "path": "lean/TypestateLifecycle.lean#merkle_dag_semilattice_laws"},
                 {"role": "execution_record", "path": "shark_protocol/kernel.py#SharkProtocolEngine.merge_divergent_ledgers"},
                 {"role": "independent_replication", "path": "tests/test_core.py"},
             ],
             "merged_claim_digests": all_digests_sorted,
             "merged_claim_ids": all_claim_ids_sorted,
             "lrsc_sha256": "merkle_dag_join",
+            "uncompressed_ring_sha256": "merkle_dag_join",
             "ode_state_snapshot": [2.05, 95.0, 4.0, 0.05],
         }
         merge_digest = sha256_canonical(merge_body)
         return dict(merge_body, digest=merge_digest)
 
     def run_lifecycle_and_redteam_audit(self) -> Dict[str, Any]:
-        """Run self-test of typestate, epoch isolation, Patankar interval step, separatrix guard, LRSC null-space, and Merkle-DAG merge."""
+        """Run self-test of typestate, epoch isolation, subnormal Patankar step, separatrix guard, LRSC Lipschitz bound, and N-way associative Merkle-DAG merge."""
         guard = WorkerEpochGuard(initial_epoch=10)
         slot1 = guard.begin_request()
         slot1.transition(LifecycleEvent.OOM_ABORT)
@@ -912,14 +1043,25 @@ class SharkProtocolEngine:
         patankar_res = self.step_ode_patankar_interval(dt=0.05)
         nagumo_res = self.verify_nagumo_boundary_certificate()
 
+        # Verify N-way Merkle-DAG associativity (A * B) * C == A * (B * C)
+        na, nb, nc = SharkProtocolEngine(), SharkProtocolEngine(), SharkProtocolEngine()
+        na.seal_claim("c.a", "Branch A", timestamp_utc="2026-10-25T00:00:00Z")
+        nb.seal_claim("c.b", "Branch B", timestamp_utc="2026-10-25T00:00:00Z")
+        nc.seal_claim("c.c", "Branch C", timestamp_utc="2026-10-25T00:00:00Z")
+        m_ab_c = self.merge_divergent_ledgers([self.merge_divergent_ledgers(na.ledger, nb.ledger)], nc.ledger)
+        m_a_bc = self.merge_divergent_ledgers(na.ledger, [self.merge_divergent_ledgers(nb.ledger, nc.ledger)])
+        assoc_ok = (m_ab_c["digest"] == m_a_bc["digest"])
+
         return {
             "partial_init_oom_deref_blocked": deref_blocked,
             "poisoned_destructor_uaf_blocked": uaf_blocked,
             "stale_worker_epoch_read_blocked": stale_blocked,
             "patankar_interval_step_certified": patankar_res["inside_B4_certified"],
             "nagumo_8face_certified": nagumo_res["all_8_faces_certified"],
+            "merkle_dag_nway_associative": assoc_ok,
             "all_checks_passed": (
                 deref_blocked and uaf_blocked and stale_blocked
                 and patankar_res["inside_B4_certified"] and nagumo_res["all_8_faces_certified"]
+                and assoc_ok
             ),
         }

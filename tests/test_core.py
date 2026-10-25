@@ -1,7 +1,7 @@
 """
-Unit, Integration, and Senior Red-Team Stress Suite (`tests/test_core.py`)
+Unit, Integration, and Double-PhD Red-Team Stress Suite (`tests/test_core.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Canonical DOI: 10.5281/zenodo.23624605
+Version: 1.2.0 (25 Tests: `test_01` .. `test_25`)
 
 Covers:
   - Layer 1: VRK v0.3.1 SHA-256 hash-chain & tamper rejection (`test_01`, `test_02`, `test_05`)
@@ -9,23 +9,28 @@ Covers:
   - Layer 2: 4D soft-wall ODE integration & 8-face Nagumo bounds (`test_06`, `test_07`)
   - Layer 3: LRSC 11/99 = 1/9 spectral projection (`test_08`)
   - Layer 4: Multi-cloud gateway failover, fail-closed config, & loopback HTTP server (`test_09`..`test_13`)
-  - Lean 4: Zero-sorry & canonical SHA-256 provenance audit across 34 theorems (`test_14`)
+  - Lean 4: Zero-sorry & canonical SHA-256 provenance audit across 38 theorems (`test_14`)
   - Red-Team Problem 1: Patankar-Euler + IEEE-754 interval enclosure under impulsive burst (`test_15`)
   - Red-Team Problem 2: P_0=0 Gronwall capacitive decay floor & basin separatrix guard (`test_16`)
   - Red-Team Problem 3: LRSC S_11^perp null-space adversarial injection detection & fallback (`test_17`)
   - Red-Team Problem 4: 16-thread concurrent worker race & mid-flight exception stress (`test_18`)
   - Red-Team Problem 5: Commutative Merkle-DAG split-brain branch reconciliation (`test_19`, `test_20`)
+  - Deep Probe A: IEEE-754 subnormal (`1e-320`) & FTZ (`0.0`) strict normal positivity guard (`test_21`)
+  - Deep Probe B: Multi-tenant engine isolation & waking basal drive saturation DoS immunity (`test_22`)
+  - Deep Probe C: Sub-threshold (`eta_perp <= tau_null`) bandlimited witness, dual digest seal, & Lipschitz attention bound (`test_23`)
+  - Deep Probe D: Free-threaded Python (PEP 703) lock-encapsulated `snapshot()` & hierarchical lock stress (`test_24`)
+  - Deep Probe E: N-way Merkle-DAG join-semilattice associativity `(A * B) * C == A * (B * C)` & idempotence `A * A == A` (`test_25`)
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import math
 import pathlib
 import re
 import threading
 import unittest
+from typing import List
 from urllib import request as urllib_request
 from urllib.error import HTTPError
 
@@ -37,6 +42,7 @@ from shark_protocol.gateway import (
     create_gateway_http_server,
 )
 from shark_protocol.kernel import (
+    FLOAT64_NORMAL_MIN,
     VRK_TRUST_ROOT_DIGEST,
     BasinCollapseError,
     LRSCCompressor,
@@ -172,6 +178,7 @@ class TestSharkProtocolSuite(unittest.TestCase):
             with urllib_request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as resp:
                 health = json.loads(resp.read().decode("utf-8"))
                 self.assertEqual(health["status"], "healthy")
+                self.assertEqual(health["version"], "1.2.0")
                 self.assertEqual(health["doi"], "10.5281/zenodo.23624605")
 
             req = urllib_request.Request(
@@ -207,12 +214,12 @@ class TestSharkProtocolSuite(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
-    def test_14_lean4_34_theorems_zero_sorry_and_canonical_hashes(self) -> None:
+    def test_14_lean4_38_theorems_zero_sorry_and_canonical_hashes(self) -> None:
         root = pathlib.Path(__file__).resolve().parent.parent
         expected = {
             "BoundaryVerification.lean": (9, "49229b6163b5a3a77dc83779a7dc5350502ff2b3d6a7f2de4d39996f4460e417"),
             "ExistenceVerification.lean": (17, "eec9486803fb2e12f94c3ef966098acd31e4a66df8269ebe8cb59a937f7abcae"),
-            "TypestateLifecycle.lean": (8, None),
+            "TypestateLifecycle.lean": (12, None),
         }
         total_theorems = 0
         for fname, (min_thms, exp_sha) in expected.items():
@@ -230,12 +237,11 @@ class TestSharkProtocolSuite(unittest.TestCase):
             thms = re.findall(r"\btheorem\s+[A-Za-z0-9_']+", clean)
             self.assertEqual(len(thms), min_thms)
             total_theorems += len(thms)
-        self.assertEqual(total_theorems, 34)
+        self.assertEqual(total_theorems, 38)
 
     def test_15_redteam_problem1_patankar_interval_impulse_burst(self) -> None:
         """Red-Team Problem 1: High-frequency impulsive prompt burst near B_4 walls cannot overshoot."""
         engine = SharkProtocolEngine(P_0=4.0, lam_sim=7.2, lam_lucid=0.3, kappa_meta=2.5)
-        # Place state extremely close to the lower/upper boundary faces and inject a massive P_0 = 5000 burst
         engine.state = np.array([1e-6, 99.9999, 1e-6, 0.999999], dtype=np.float64)
         res = engine.step_ode_patankar_interval(dt=0.20, P_0=5000.0)
         self.assertTrue(res["inside_B4_certified"])
@@ -247,19 +253,16 @@ class TestSharkProtocolSuite(unittest.TestCase):
     def test_16_redteam_problem2_p0_zero_basin_separatrix_guard(self) -> None:
         """Red-Team Problem 2: P_0 = 0 Gronwall capacitive decay floor and basin collapse rejection."""
         engine = SharkProtocolEngine(P_0=0.0, lam_sim=7.2, lam_lucid=0.3, kappa_meta=2.5)
-        # Valid natural decay over dt=0.05s from Psi=0.80 stays above Gronwall floor 0.80 * exp(-0.60 * 0.05) = 0.776356
         valid = engine.evaluate_basin_separatrix_guard(
             dt_window=0.05, psi_before=0.80, psi_after=0.785, gamma_after=2.5, P_0=0.0
         )
         self.assertTrue(valid["basin_safe"])
 
-        # Adversarial perturbation attempting to force Psi below Gronwall floor is rejected fail-closed
         with self.assertRaises(BasinCollapseError):
             engine.evaluate_basin_separatrix_guard(
                 dt_window=0.05, psi_before=0.80, psi_after=0.50, gamma_after=2.5, P_0=0.0
             )
 
-        # Adversarial perturbation forcing trajectory across separatrix into origin attraction basin is rejected
         with self.assertRaises(BasinCollapseError):
             engine.evaluate_basin_separatrix_guard(
                 dt_window=5.0, psi_before=0.80, psi_after=0.05, gamma_after=0.01, P_0=0.0
@@ -268,7 +271,6 @@ class TestSharkProtocolSuite(unittest.TestCase):
     def test_17_redteam_problem3_lrsc_null_space_adversarial_injection(self) -> None:
         """Red-Team Problem 3: Out-of-band energy concentrated in S_11^perp triggers fail-closed fallback seal."""
         comp = LRSCCompressor(null_space_threshold=0.92)
-        # Construct an adversarial vector supported strictly in the 88 discarded indices S_11^perp
         adv_vec = np.ones(99, dtype=np.float64)
         for idx in comp.WITNESS_INDICES:
             adv_vec[idx] = 0.0
@@ -280,8 +282,7 @@ class TestSharkProtocolSuite(unittest.TestCase):
         self.assertEqual(len(res["uncompressed_fallback_sha256"]), 64)
 
     def test_18_redteam_problem4_multithreaded_typestate_and_epoch_race_stress(self) -> None:
-        """Red-Team Problem 4: 16 concurrent threads executing 20 lifecycle/gateway transitions with fault injection."""
-        gw = MultiProviderGateway()
+        """Red-Team Problem 4: 16 concurrent threads executing lifecycle/gateway transitions with fault injection."""
         errors: List[str] = []
         completed_epochs: List[int] = []
         lock = threading.Lock()
@@ -326,20 +327,17 @@ class TestSharkProtocolSuite(unittest.TestCase):
         node_a = SharkProtocolEngine()
         node_b = SharkProtocolEngine()
 
-        # Common genesis claim on both nodes
-        ts0 = "2026-10-24T10:00:00Z"
+        ts0 = "2026-10-25T10:00:00Z"
         node_a.seal_claim("claim.genesis", "Shared genesis state", timestamp_utc=ts0)
         node_b.seal_claim("claim.genesis", "Shared genesis state", timestamp_utc=ts0)
         self.assertEqual(node_a.ledger[0]["digest"], node_b.ledger[0]["digest"])
 
-        # Network partition: Node A and Node B process different dispatches
-        node_a.seal_claim("claim.nodeA.1", "Node A dispatch 1", timestamp_utc="2026-10-24T10:01:00Z")
-        node_a.seal_claim("claim.nodeA.2", "Node A dispatch 2", timestamp_utc="2026-10-24T10:02:00Z")
-        node_b.seal_claim("claim.nodeB.1", "Node B dispatch 1", timestamp_utc="2026-10-24T10:01:30Z")
+        node_a.seal_claim("claim.nodeA.1", "Node A dispatch 1", timestamp_utc="2026-10-25T10:01:00Z")
+        node_a.seal_claim("claim.nodeA.2", "Node A dispatch 2", timestamp_utc="2026-10-25T10:02:00Z")
+        node_b.seal_claim("claim.nodeB.1", "Node B dispatch 1", timestamp_utc="2026-10-25T10:01:30Z")
 
         self.assertNotEqual(node_a.ledger[-1]["digest"], node_b.ledger[-1]["digest"])
 
-        # Reconcile in both orders: merge(A, B) == merge(B, A)
         merge_ab = SharkProtocolEngine.merge_divergent_ledgers(node_a.ledger, node_b.ledger)
         merge_ba = SharkProtocolEngine.merge_divergent_ledgers(node_b.ledger, node_a.ledger)
         self.assertEqual(merge_ab["digest"], merge_ba["digest"])
@@ -350,13 +348,153 @@ class TestSharkProtocolSuite(unittest.TestCase):
         """Red-Team Problem 5: Merkle-DAG reconciliation rejects a tampered branch fail-closed."""
         node_a = SharkProtocolEngine()
         node_b = SharkProtocolEngine()
-        node_a.seal_claim("claim.1", "Valid branch A", timestamp_utc="2026-10-24T10:00:00Z")
-        node_b.seal_claim("claim.2", "Valid branch B", timestamp_utc="2026-10-24T10:00:00Z")
+        node_a.seal_claim("claim.1", "Valid branch A", timestamp_utc="2026-10-25T10:00:00Z")
+        node_b.seal_claim("claim.2", "Valid branch B", timestamp_utc="2026-10-25T10:00:00Z")
 
-        # Tamper with branch B
         node_b.ledger[0]["claim_text"] = "Forged branch B"
         with self.assertRaises(RuntimeError):
             SharkProtocolEngine.merge_divergent_ledgers(node_a.ledger, node_b.ledger)
+
+    def test_21_deep_probe_a_ieee754_subnormal_and_ftz_positivity_floor(self) -> None:
+        """Deep Probe A: Subnormal (`1e-320`) states are lifted to >= FLOAT64_NORMAL_MIN without NaN or underflow."""
+        engine = SharkProtocolEngine(P_0=0.0, lam_sim=0.0, lam_lucid=0.0, kappa_meta=2.5)
+        engine.state = np.array([1e-320, 1e-320, 1e-320, 1e-320], dtype=np.float64)
+        res = engine.step_ode_patankar_interval(dt=0.05, P_0=0.0)
+        self.assertTrue(res["inside_B4_certified"])
+        for lo_val in res["interval_lo"]:
+            self.assertGreaterEqual(lo_val, FLOAT64_NORMAL_MIN)
+            self.assertGreater(lo_val, 0.0)
+
+        # Even from exact FTZ 0.0 with positive basal input P_0 = 1.0, gamma/H_obs/I_dot/Psi lift strictly above FLOAT64_NORMAL_MIN
+        engine.state = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+        res_ftz = engine.step_ode_patankar_interval(dt=0.05, P_0=1.0)
+        self.assertTrue(res_ftz["inside_B4_certified"])
+        for lo_val in res_ftz["interval_lo"]:
+            self.assertGreaterEqual(lo_val, FLOAT64_NORMAL_MIN)
+
+    def test_22_deep_probe_b_multitenant_isolation_and_saturation_dos_immunity(self) -> None:
+        """Deep Probe B: Dissipative / zero-drive requests from an attacker tenant cannot lock out legitimate tenants."""
+        gw = MultiProviderGateway(min_waking_p0=1.0)
+        # Attacker attempts to force P_0 = 0.0 across 30 consecutive dispatches
+        for _ in range(30):
+            att_res = gw.process_request(
+                prompt="",
+                provider="groq",
+                tenant_id="attacker_tenant",
+                requested_p0=0.0,
+            )
+            self.assertEqual(att_res["status"], "SEALED_OK")
+            self.assertGreaterEqual(att_res["effective_p0"], 1.0)
+            self.assertTrue(att_res["separatrix_guard"]["basin_safe"])
+
+        # Legitimate tenant engine state and ledger remain 100% isolated from attacker_tenant
+        legit_res = gw.process_request(
+            prompt="Legitimate research query",
+            provider="groq",
+            tenant_id="legitimate_scientist",
+        )
+        self.assertEqual(legit_res["status"], "SEALED_OK")
+        self.assertEqual(legit_res["worker_epoch"], 2)
+        self.assertEqual(len(gw.get_tenant_engine("legitimate_scientist").ledger), 1)
+        self.assertEqual(len(gw.get_tenant_engine("attacker_tenant").ledger), 30)
+
+    def test_23_deep_probe_c_subthreshold_lrsc_bandlimited_witness_and_lipschitz_bound(self) -> None:
+        """Deep Probe C: Near-threshold (`eta_perp = tau_null - eps`) inputs satisfy Lipschitz attention bound and dual-seal VRK."""
+        comp = LRSCCompressor(null_space_threshold=0.92, attn_weight_norm=1.0, attn_head_dim=64)
+        self.assertGreater(comp.channel_witness_sigma_min, 0.18)
+
+        # Construct a vector with orthogonal ratio just below threshold (eta_perp ~ 0.90 < 0.92)
+        vec = np.zeros(99, dtype=np.float64)
+        vec[0] = 0.43588989 / comp.envelope[0]
+        vec[2] = 0.90000000 / comp.envelope[2]  # index 2 is in S_11^perp
+        res = comp.compress("sub_threshold_probe", raw_ring_vector=vec)
+
+        self.assertFalse(res["null_space_anomaly_detected"])
+        self.assertLessEqual(res["orthogonal_null_space_l2_ratio"], 0.92)
+        self.assertLessEqual(
+            res["attention_perturbation_upper_bound"],
+            res["attention_perturbation_threshold_ceiling"],
+        )
+        self.assertEqual(len(res["bandlimited_witness_vector"]), 11)
+        self.assertEqual(len(res["lrsc_sha256"]), 64)
+        self.assertEqual(len(res["uncompressed_fallback_sha256"]), 64)
+
+        # Verify that Gateway seals BOTH compressed and uncompressed SHA-256 digests in the VRK ledger
+        gw = MultiProviderGateway()
+        gw_out = gw.process_request("Dual seal verification", provider="groq")
+        self.assertEqual(gw_out["vrk_seal"]["lrsc_sha256"], gw_out["lrsc"]["lrsc_sha256"])
+        self.assertEqual(
+            gw_out["vrk_seal"]["uncompressed_ring_sha256"],
+            gw_out["lrsc"]["uncompressed_fallback_sha256"],
+        )
+
+    def test_24_deep_probe_d_freethreaded_lock_encapsulation_and_snapshot_consistency(self) -> None:
+        """Deep Probe D: Concurrent `guard.read_slot()` and `slot.snapshot()` under contention maintain sequential consistency."""
+        guard = WorkerEpochGuard(initial_epoch=1)
+        slot = guard.begin_request()
+        slot.transition(LifecycleEvent.SEAL_SUCCESS, payload={"k": "v"})
+        errors: List[str] = []
+
+        def reader_loop() -> None:
+            for _ in range(50):
+                try:
+                    ep, st, zeroed, fseq = slot.snapshot()
+                    if zeroed and st not in (LifecycleState.ZEROED_FREED, LifecycleState.ABORTED_POISONED):
+                        errors.append(f"Torn state/zeroed read: state={st}, zeroed={zeroed}")
+                    if fseq < 2:
+                        errors.append(f"Non-monotonic fence_seq={fseq}")
+                except Exception as exc:
+                    errors.append(str(exc))
+
+        threads = [threading.Thread(target=reader_loop) for _ in range(12)]
+        for t in threads:
+            t.start()
+        guard.finish_request(slot, abort=False)
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(slot.state, LifecycleState.ZEROED_FREED)
+        self.assertTrue(slot.is_zeroed)
+
+    def test_25_deep_probe_e_merkle_dag_nway_associativity_and_idempotence(self) -> None:
+        """Deep Probe E: 3-way and 4-way split-brain branch merges satisfy (A * B) * C == A * (B * C) and A * A == A."""
+        node_a = SharkProtocolEngine()
+        node_b = SharkProtocolEngine()
+        node_c = SharkProtocolEngine()
+
+        ts_gen = "2026-10-25T12:00:00Z"
+        for node in (node_a, node_b, node_c):
+            node.seal_claim("claim.genesis", "Common root", timestamp_utc=ts_gen)
+
+        node_a.seal_claim("claim.A", "Partition A work", timestamp_utc="2026-10-25T12:01:00Z")
+        node_b.seal_claim("claim.B", "Partition B work", timestamp_utc="2026-10-25T12:02:00Z")
+        node_c.seal_claim("claim.C", "Partition C work", timestamp_utc="2026-10-25T12:03:00Z")
+
+        # Left-associated merge: (A * B) * C
+        merge_ab = SharkProtocolEngine.merge_divergent_ledgers(node_a.ledger, node_b.ledger)
+        merge_ab_c = SharkProtocolEngine.merge_divergent_ledgers([merge_ab], node_c.ledger)
+
+        # Right-associated merge: A * (B * C)
+        merge_bc = SharkProtocolEngine.merge_divergent_ledgers(node_b.ledger, node_c.ledger)
+        merge_a_bc = SharkProtocolEngine.merge_divergent_ledgers(node_a.ledger, [merge_bc])
+
+        # Permuted-order merge: (C * A) * B and N-way direct merge(A, B, C)
+        merge_ca = SharkProtocolEngine.merge_divergent_ledgers(node_c.ledger, node_a.ledger)
+        merge_ca_b = SharkProtocolEngine.merge_divergent_ledgers([merge_ca], node_b.ledger)
+        merge_abc_direct = SharkProtocolEngine.merge_divergent_ledgers(
+            node_a.ledger, node_b.ledger, node_c.ledger
+        )
+
+        self.assertEqual(merge_ab_c["digest"], merge_a_bc["digest"])
+        self.assertEqual(merge_ab_c["digest"], merge_ca_b["digest"])
+        self.assertEqual(merge_ab_c["digest"], merge_abc_direct["digest"])
+        self.assertEqual(len(merge_ab_c["leaf_frontier_tips"]), 3)
+        self.assertEqual(len(merge_ab_c["merged_claim_digests"]), 4)
+
+        # Idempotence: A * A == A (and (A * B) * B == A * B)
+        merge_ab_b = SharkProtocolEngine.merge_divergent_ledgers([merge_ab], node_b.ledger)
+        self.assertEqual(merge_ab_b["digest"], merge_ab["digest"])
 
 
 if __name__ == "__main__":

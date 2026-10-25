@@ -2,8 +2,8 @@ from setuptools import setup, find_packages
 
 setup(
     name="shark_protocol",
-    version="1.1.2",
-    description="Formal Verification, 4D Soft-Wall ODE Governor, LRSC 11/99 Spectral Compression, and Merkle-DAG Provenance Kernel",
+    version="1.2.0",
+    description="Formal Verification (38 Lean 4 Theorems), 4D Soft-Wall ODE Governor, Bandlimited LRSC 11/99 Spectral Compression, and Associative Merkle-DAG Provenance Kernel",
     author="Prince Upadhyay",
     author_email="starxshark@gmail.com",
     url="https://github.com/reggaesharkk/The-Reggae-Shark-Protocol",

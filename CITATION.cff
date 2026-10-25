@@ -1,9 +1,9 @@
 cff-version: 1.2.0
 message: "If you use The Reggae Shark Protocol in your research, please cite it using the metadata below."
-title: "The Reggae Shark Protocol: Formal Verification, 4D Soft-Wall ODE Governance, LRSC Spectral Compression, and Merkle-DAG Provenance Kernel"
-version: "1.1.2"
+title: "The Reggae Shark Protocol (v1.2.0): Formal Verification (38 Lean 4 Theorems), 4D Soft-Wall ODE Governance, Bandlimited LRSC Spectral Compression, and N-Way Associative Merkle-DAG Provenance Kernel"
+version: "1.2.0"
 doi: "10.5281/zenodo.23624605"
-date-released: "2026-10-24"
+date-released: "2026-10-25"
 license: "MIT"
 repository-code: "https://github.com/reggaesharkk/The-Reggae-Shark-Protocol"
 authors:
@@ -14,7 +14,10 @@ authors:
 identifiers:
   - type: doi
     value: "10.5281/zenodo.23624605"
-    description: "Canonical v1.1.2 Zenodo Archive (v3, superseding v2 10.5281/zenodo.23620074)"
+    description: "Zenodo v3 Deposit DOI (Superseded by v1.2.0 / Zenodo v4)"
+  - type: doi
+    value: "10.5281/zenodo.23620074"
+    description: "Superseded v1.1.0 Zenodo Deposit (v2)"
   - type: doi
     value: "10.5281/zenodo.23618033"
     description: "Superseded v1.0.3 Zenodo Deposit (v1)"

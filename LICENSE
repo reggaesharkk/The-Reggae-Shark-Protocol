@@ -14,9 +14,10 @@ The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 
 The accompanying technical specification manuscript (`paper/specification.tex`
-and `paper/specification.pdf`) and archival metadata (Zenodo DOI:
-10.5281/zenodo.23624605) are licensed under the Creative Commons Attribution 4.0
-International License (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/).
+and `paper/specification.pdf`) and archival metadata (Zenodo Lineage DOIs:
+10.5281/zenodo.23624605, 10.5281/zenodo.23620074, and 10.5281/zenodo.23618033)
+are licensed under the Creative Commons Attribution 4.0 International License
+(CC BY 4.0, https://creativecommons.org/licenses/by/4.0/).
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,

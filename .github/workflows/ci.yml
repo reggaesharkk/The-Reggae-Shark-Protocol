@@ -9,7 +9,7 @@ on:
 
 jobs:
   lean4-formal-proofs:
-    name: Lean 4 Formal Verification (34 Theorems, 0 sorry)
+    name: Lean 4 Formal Verification (38 Theorems, 0 sorry)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -26,7 +26,7 @@ jobs:
               clean = re.sub(r"--[^\\n]*", " ", clean)
               assert re.search(r"\\bsorry\\b", clean) is None, f"sorry found in {name}"
               assert re.search(r"\\bnlinarith\\b", clean) is None, f"nlinarith found in {name}"
-          print("All 3 Lean 4 modules verified free of sorry and nlinarith.")
+          print("All 3 Lean 4 modules (38 theorems) verified free of sorry and nlinarith.")
           '
 
       - name: Install elan and build Lean 4 targets
@@ -59,7 +59,7 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
 
-      - name: Run Pytest Unit & Red-Team Suite (20 Tests)
+      - name: Run Pytest Unit & Double-PhD Red-Team Suite (25 Tests)
         run: pytest -v tests/
 
       - name: Run CLI Lifecycle & Red-Team Audit
