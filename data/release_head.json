@@ -1,0 +1,129 @@
+{
+  "expected_pubkey": "7cae9b4572a0f32715fbd9e6aa7f476ccca38b23aabc717d8f8430df0fa56d5e",
+  "ledger": [
+    {
+      "claim_class": "ANALYTIC_THEOREM",
+      "claim_id": "shark.reference.genesis.v1_3_2",
+      "claim_text": "Reference genesis verification record for The Reggae Shark Protocol v1.3.2.",
+      "digest": "502494bc3971d7b9e69f33a677c2bf741e005effb737f6c50736f079a02d0c32",
+      "ed25519_signature": "7c011fc1354d6347b283bcc6099e3fe98bed9c953ac4ab03dcfb02b4b8e7777e6738ed87e84095a3aad962e13ce6961fd20053f0db1e34b03289cbcebc3ae805",
+      "evidence": [
+        {
+          "file_sha256": "3d798bf53652a04d33dcd366475e3b742daa7e894c200cec0b1d91e21140c005",
+          "path": "lean/TypestateLifecycle.lean#LifecycleState",
+          "role": "definition"
+        },
+        {
+          "file_sha256": "3d798bf53652a04d33dcd366475e3b742daa7e894c200cec0b1d91e21140c005",
+          "path": "lean/TypestateLifecycle.lean#sealed_active_unique_trace_from_uninit",
+          "role": "proof"
+        },
+        {
+          "file_sha256": "3d798bf53652a04d33dcd366475e3b742daa7e894c200cec0b1d91e21140c005",
+          "path": "lean/TypestateLifecycle.lean#does_not_imply",
+          "role": "scope_statement"
+        },
+        {
+          "file_sha256": "eec9486803fb2e12f94c3ef966098acd31e4a66df8269ebe8cb59a937f7abcae",
+          "path": "lean/ExistenceVerification.lean#existence_box_8face_nagumo_certificate",
+          "role": "independent_verification"
+        }
+      ],
+      "evidence_root": "068260341458ba862d41a77cd710f2afe3fa3a36fa7d09657350d09903403bb8",
+      "index": 1,
+      "lrsc_sha256": "none",
+      "ode_state_snapshot": [
+        2.05,
+        95.0,
+        4.0,
+        0.05
+      ],
+      "parent_hashes": [
+        "f010a99d78b360b8fd5dc9b727f21b898889c6e75e3093cc22d6f04d005a0d0f"
+      ],
+      "prev_hash": "f010a99d78b360b8fd5dc9b727f21b898889c6e75e3093cc22d6f04d005a0d0f",
+      "prompt_sha256": "61508161312903cd4e20a5d9859735340c5f2df3bef979ed31bcc03c71d16154",
+      "response_sha256": "7a0d25e822a18e38e9aabfdbd11810f1e2ad3907d08a0a3ef0c03be74f3ebcbb",
+      "schema": "intentseal-vrk-claim-v2",
+      "scope": {
+        "applies_to": [
+          "4D Soft-Wall ODE Governor (B_4) and LRSC 11/99 context projection",
+          "Application-layer request-lifecycle typestate and worker-epoch state machine"
+        ],
+        "does_not_imply": [
+          "OS ring-0 kernel memory protection or native C/PHP runtime patching",
+          "Unconditional continuum PDE regularity or machine consciousness"
+        ]
+      },
+      "sealed": true,
+      "signer_pubkey": "7cae9b4572a0f32715fbd9e6aa7f476ccca38b23aabc717d8f8430df0fa56d5e",
+      "timestamp_utc": "2026-10-26T00:00:00Z",
+      "trust_root": "f010a99d78b360b8fd5dc9b727f21b898889c6e75e3093cc22d6f04d005a0d0f",
+      "uncompressed_ring_sha256": "none"
+    },
+    {
+      "claim_class": "NUMERICAL_OBSERVATION",
+      "claim_id": "shark.reference.wp19.v1_3_2",
+      "claim_text": "Reference 120-segment Duhamel parameter study record on data/wp19_segments.json.",
+      "digest": "866e1919b5a3e9e1e896496f735fdc94846e03497533b74f6fe3a5a96608ee5b",
+      "ed25519_signature": "4d56781a4f5d433145b32a0b3a00b6090102fd3ca5583e9630f15ab66413e0599a2b279f910b42dcb414a0567ab917c51e4a0ffe8bce83649d100ce5acda7803",
+      "evidence": [
+        {
+          "file_sha256": "3d798bf53652a04d33dcd366475e3b742daa7e894c200cec0b1d91e21140c005",
+          "path": "lean/TypestateLifecycle.lean#duhamel_piecewise_contraction_bound",
+          "role": "definition"
+        },
+        {
+          "file_sha256": "a78a67c8ea8f4950dcf8bad6e76ebb7fe6362742ac1dbc63881cc14311d99319",
+          "path": "data/wp19_segments.json",
+          "role": "execution_record"
+        }
+      ],
+      "evidence_root": "1f0e264da2fe586e2a392978ca2f9d51e5cf07e47417f629188fdc918ea1fab5",
+      "index": 2,
+      "lrsc_sha256": "none",
+      "ode_state_snapshot": [
+        2.05,
+        95.0,
+        4.0,
+        0.05
+      ],
+      "parent_hashes": [
+        "502494bc3971d7b9e69f33a677c2bf741e005effb737f6c50736f079a02d0c32"
+      ],
+      "prev_hash": "502494bc3971d7b9e69f33a677c2bf741e005effb737f6c50736f079a02d0c32",
+      "prompt_sha256": "1aa4d1f63611832ce4ecd50198b0da6996f2e07cd024b3c11a20c5c2563a5583",
+      "response_sha256": "c630e2d6e065a50946c4d1ec05eb01facdedbd127d5b1b981dc4290291c73f4e",
+      "schema": "intentseal-vrk-claim-v2",
+      "scope": {
+        "applies_to": [
+          "4D Soft-Wall ODE Governor (B_4) and LRSC 11/99 context projection",
+          "Application-layer request-lifecycle typestate and worker-epoch state machine"
+        ],
+        "does_not_imply": [
+          "OS ring-0 kernel memory protection or native C/PHP runtime patching",
+          "Unconditional continuum PDE regularity or machine consciousness"
+        ]
+      },
+      "sealed": true,
+      "signer_pubkey": "7cae9b4572a0f32715fbd9e6aa7f476ccca38b23aabc717d8f8430df0fa56d5e",
+      "timestamp_utc": "2026-10-26T00:01:00Z",
+      "trust_root": "f010a99d78b360b8fd5dc9b727f21b898889c6e75e3093cc22d6f04d005a0d0f",
+      "uncompressed_ring_sha256": "none"
+    }
+  ],
+  "note": "Reference ledger fixture generated with UNTRUSTED_TEST_ONLY_SEED for deterministic verification of verify_exported_ledger.",
+  "schema": "shark-reference-release-ledger-v1",
+  "signed_head": {
+    "ed25519_signature": "a96cb7f4751e50c52f8c87bcb86788bf49e0c8e09b409750f8e558850d5da163bfca26883fc657b9424f8f025d3728a9819c8744925d3ef1be0686f79adc3006",
+    "head_digest": "7a6019c7f42f4adad0ee32211412e133ccb85a3dd100790f6471bd94eb1dcd06",
+    "head_hash": "866e1919b5a3e9e1e896496f735fdc94846e03497533b74f6fe3a5a96608ee5b",
+    "head_index": 1,
+    "issued_at": "2026-10-26T00:02:00Z",
+    "ledger_length": 2,
+    "schema": "intentseal-vrk-head-v2",
+    "signer_pubkey": "7cae9b4572a0f32715fbd9e6aa7f476ccca38b23aabc717d8f8430df0fa56d5e",
+    "trust_root": "f010a99d78b360b8fd5dc9b727f21b898889c6e75e3093cc22d6f04d005a0d0f"
+  },
+  "version": "1.3.2"
+}

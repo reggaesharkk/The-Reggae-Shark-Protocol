@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """
-CI & Local Gate: Verify all 41 Lean 4 theorems across BoundaryVerification.lean (9),
-ExistenceVerification.lean (17), and TypestateLifecycle.lean (15).
+CI & Local Verification Gate for Lean 4 Theorems and Transition Table (`tools/check_lean_axioms.py`).
 
 Checks:
-1. Comment-stripped source of all 3 Lean modules contains zero `sorry`, `sorryAx`, `axiom`, or `nlinarith`,
-   and declares all 41 expected theorem names.
-2. `lean/AxiomsCheck.lean` contains `#print axioms <thm>` for all 41 theorems.
-3. When given the stdout file from `lake env lean lean/AxiomsCheck.lean`, verifies that all 41
+1. Comment-stripped source of all 3 Lean modules (`BoundaryVerification.lean`: 9,
+   `ExistenceVerification.lean`: 17, `TypestateLifecycle.lean`: 16) contains zero `sorry`,
+   `sorryAx`, `axiom`, or `nlinarith`, and declares all 42 expected theorem names.
+2. `lean/AxiomsCheck.lean` contains `#print axioms <thm>` for all 42 theorems.
+3. When given the stdout file from `lake env lean lean/AxiomsCheck.lean`, verifies that all 42
    theorems appear in the output and that every theorem's axioms are a subset of
    `{"propext", "Classical.choice", "Quot.sound"}` (or `does not depend on any axioms`) with zero `sorryAx`.
+4. When invoked with `--check-transition-table <eval_stdout_file>`, extracts the JSON emitted by
+   `#eval dumpTransitionTableJson` in `lake env lean lean/TypestateLifecycle.lean` and diffs it
+   against `data/lean_transition_table.json` so the committed table can never drift from Lean.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -26,6 +30,13 @@ LEAN_MODULES = (
     "lean/ExistenceVerification.lean",
     "lean/TypestateLifecycle.lean",
 )
+
+EXPECTED_COUNTS = {
+    "lean/BoundaryVerification.lean": 9,
+    "lean/ExistenceVerification.lean": 17,
+    "lean/TypestateLifecycle.lean": 16,
+}
+TOTAL_EXPECTED_THEOREMS = 42
 
 
 def strip_lean_comments(text: str) -> str:
@@ -51,13 +62,8 @@ def discover_declared_theorems(repo_root: Path = REPO_ROOT) -> Dict[str, List[st
 
 def verify_axioms_check_source(repo_root: Path = REPO_ROOT) -> List[str]:
     decl_map = discover_declared_theorems(repo_root)
-    expected_counts = {
-        "lean/BoundaryVerification.lean": 9,
-        "lean/ExistenceVerification.lean": 17,
-        "lean/TypestateLifecycle.lean": 15,
-    }
     all_theorems: List[str] = []
-    for rel, count in expected_counts.items():
+    for rel, count in EXPECTED_COUNTS.items():
         found = decl_map[rel]
         if len(found) != count:
             raise AssertionError(f"{rel}: expected {count} theorems, found {len(found)}")
@@ -68,9 +74,9 @@ def verify_axioms_check_source(repo_root: Path = REPO_ROOT) -> List[str]:
         raise AssertionError("Missing lean/AxiomsCheck.lean")
     ax_clean = strip_lean_comments(ax_path.read_text(encoding="utf-8"))
     printed = [m.split(".")[-1] for m in re.findall(r"#print\s+axioms\s+([A-Za-z0-9_.']+)", ax_clean)]
-    if sorted(printed) != sorted(all_theorems) or len(printed) != 41:
+    if sorted(printed) != sorted(all_theorems) or len(printed) != TOTAL_EXPECTED_THEOREMS:
         raise AssertionError(
-            f"lean/AxiomsCheck.lean #print axioms mismatch: expected 41 theorems, got {len(printed)}"
+            f"lean/AxiomsCheck.lean #print axioms mismatch: expected {TOTAL_EXPECTED_THEOREMS} theorems, got {len(printed)}"
         )
     return all_theorems
 
@@ -101,13 +107,68 @@ def verify_lean_axioms_output(stdout_text: str, repo_root: Path = REPO_ROOT) -> 
     missing = set(expected) - set(parsed.keys())
     if missing:
         raise AssertionError(f"Missing #print axioms output for {len(missing)} theorems: {sorted(missing)}")
-    if len(parsed) != 41:
-        raise AssertionError(f"Expected 41 theorem axiom records, got {len(parsed)}")
+    if len(parsed) != TOTAL_EXPECTED_THEOREMS:
+        raise AssertionError(f"Expected {TOTAL_EXPECTED_THEOREMS} theorem axiom records, got {len(parsed)}")
     return parsed
+
+
+def verify_lean_transition_table_eval(
+    eval_stdout_text: str,
+    repo_root: Path = REPO_ROOT,
+) -> Dict[str, Dict[str, str]]:
+    """
+    Parse the JSON string emitted by `#eval dumpTransitionTableJson` in
+    `lake env lean lean/TypestateLifecycle.lean` and verify that it matches
+    `data/lean_transition_table.json` on all 30 state-event transitions.
+    """
+    committed_path = repo_root / "data" / "lean_transition_table.json"
+    if not committed_path.exists():
+        raise AssertionError("Missing data/lean_transition_table.json")
+    committed_table = json.loads(committed_path.read_text(encoding="utf-8"))
+
+    parsed_eval = None
+    for raw_line in eval_stdout_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith('"') and line.endswith('"'):
+            try:
+                unquoted = json.loads(line)
+                if isinstance(unquoted, str) and unquoted.startswith("{"):
+                    cand = json.loads(unquoted)
+                    if isinstance(cand, dict) and "UNINIT" in cand:
+                        parsed_eval = cand
+                        break
+            except Exception:
+                pass
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                cand = json.loads(line)
+                if isinstance(cand, dict) and "UNINIT" in cand:
+                    parsed_eval = cand
+                    break
+            except Exception:
+                pass
+
+    if parsed_eval is None:
+        raise AssertionError("Could not find #eval dumpTransitionTableJson output in Lean stdout.")
+    if parsed_eval != committed_table:
+        raise AssertionError(
+            f"Lean #eval transition table drifted from data/lean_transition_table.json:\n"
+            f"  eval={json.dumps(parsed_eval, sort_keys=True)}\n"
+            f"  file={json.dumps(committed_table, sort_keys=True)}"
+        )
+    return parsed_eval
 
 
 def main(argv: List[str]) -> int:
     expected = verify_axioms_check_source(REPO_ROOT)
+    if len(argv) >= 3 and argv[1] == "--check-transition-table":
+        eval_path = Path(argv[2])
+        eval_text = eval_path.read_text(encoding="utf-8")
+        verify_lean_transition_table_eval(eval_text, REPO_ROOT)
+        print("OK: Lean #eval transition table matches committed data/lean_transition_table.json (30/30 entries).")
+        return 0
     if len(argv) >= 2 and argv[1] != "--source-only":
         out_path = Path(argv[1])
         stdout_text = out_path.read_text(encoding="utf-8")

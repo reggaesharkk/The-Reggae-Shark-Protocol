@@ -1,7 +1,5 @@
-numpy==1.26.4
-scipy==1.13.1
-mpmath==1.3.0
-requests==2.32.3
-python-dotenv==1.0.1
-pytest==8.3.3
-cryptography==43.0.3
+numpy>=1.26.0
+mpmath>=1.3.0
+cryptography>=41.0.0
+requests>=2.31.0
+python-dotenv>=1.0.0

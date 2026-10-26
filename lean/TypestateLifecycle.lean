@@ -7,28 +7,29 @@ import Mathlib.Data.Real.Basic
 # Sequence Monotonicity, and Merkle-DAG Join-Semilattice (`TypestateLifecycle.lean`)
 
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.3.1 (Reviewer-Audited Edition | Concept DOI: 10.5281/zenodo.23618032 | Prior v4 DOI: 10.5281/zenodo.23635351)
+Version: 1.3.2 (Concept DOI: 10.5281/zenodo.23618032)
 License: MIT License
 
 ## Scope & Claim Boundary (`does_not_imply`)
-This module machine-checks fifteen formal properties of the Shark Protocol's mathematical models
+This module machine-checks sixteen formal properties of the Shark Protocol's mathematical models
 with zero `sorry` axioms and zero `nlinarith` heuristics:
-1. Five theorems (`oom_from_partial_init_is_poisoned`, `no_deref_after_partial_oom_abort`,
-   `no_shutdown_uaf_on_poisoned_state`, `stale_epoch_read_rejected`, and
-   `typestate_and_epoch_security_certificate`) formalizing a 6-state request-lifecycle typestate
-   automaton (where `ZeroedFreed` is strictly absorbing and `{AbortedPoisoned, ZeroedFreed}` forms
-   a closed terminal sink across all multi-step event traces `evs : List LifecycleEvent`) and a
-   worker-epoch guard (`slotEpoch = workerEpoch`).
-2. Three bridge theorems over `ℝ` and `Nat` addressing real-arithmetic Patankar-Euler step
+1. Six theorems (`oom_from_partial_init_is_poisoned`, `no_deref_after_partial_oom_abort`,
+   `no_shutdown_uaf_on_poisoned_state`, `stale_epoch_read_rejected`,
+   `typestate_and_epoch_security_certificate`, and `sealed_active_unique_trace_from_uninit`)
+   formalizing a 6-state request-lifecycle typestate automaton (where `ZeroedFreed` is strictly
+   absorbing, `{AbortedPoisoned, ZeroedFreed}` forms a closed terminal sink across all finite
+   event traces `evs : List LifecycleEvent`, and `SealedActive` is reachable from `Uninit` if and
+   only if `evs = [BeginInit, SealSuccess]`) and a worker-epoch guard (`slotEpoch = workerEpoch`).
+2. Three theorems over `ℝ` and `Nat` addressing real-arithmetic Patankar-Euler step
    box bounds (`patankar_euler_step_in_box`), the pointwise differential lower bound
    `dΨ/dt ≥ -μ_Ψ * Ψ` (`psi_decay_floor_bound`), and pairwise Merkle-DAG parent-pair commutativity
    (`merkle_dag_merge_commutative`).
-3. Four supplementary theorems addressing real-arithmetic Patankar-Euler strict positivity
+3. Four theorems addressing real-arithmetic Patankar-Euler strict positivity
    (`patankar_strict_positivity_floor`), linear perturbation budget scaling
    (`perturbation_budget_scaling`), sequence counter strict monotonicity
    (`fence_seq_strict_monotonicity`), and N-way Merkle-DAG join-semilattice commutativity,
    associativity, and idempotence (`merkle_dag_semilattice_laws`).
-4. Three cross-program theorems/lemmas: outward-rounded interval containment
+4. Three theorems/lemmas covering outward-rounded interval containment
    (`patankar_interval_rounding_in_box`), a definitional projection lemma
    (`projection_independent_of_secret`), and two-step piecewise Duhamel contraction vs. single-horizon
    growth (`duhamel_piecewise_contraction_bound`).
@@ -142,6 +143,64 @@ structure WorkerSlot where
 def canAccessWorkerSlot (workerEpoch : Nat) (slot : WorkerSlot) : Prop :=
   slot.slotEpoch = workerEpoch ∧ slot.state = LifecycleState.SealedActive ∧ slot.isZeroed = false
 
+/-- Factored single-step sink closure helper for `{AbortedPoisoned, ZeroedFreed}`. -/
+private def sink_step_closed : ∀ (s : LifecycleState) (e : LifecycleEvent),
+    (s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) →
+    (stepLifecycle s e = LifecycleState.AbortedPoisoned ∨ stepLifecycle s e = LifecycleState.ZeroedFreed) := by
+  intro s e hs
+  cases hs with
+  | inl h_ab =>
+    rw [h_ab]
+    cases e with
+    | BeginInit   => exact Or.inl rfl
+    | SealSuccess => exact Or.inl rfl
+    | OOMAbort    => exact Or.inl rfl
+    | NormalClose => exact Or.inl rfl
+    | ZeroAndFree => exact Or.inr rfl
+  | inr h_zf =>
+    rw [h_zf]
+    cases e <;> exact Or.inr rfl
+
+/-- Factored multi-step trace sink closure helper for `{AbortedPoisoned, ZeroedFreed}`. -/
+private def sink_trace_closed : ∀ (l : List LifecycleEvent) (s : LifecycleState),
+    (s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) →
+    (runTrace s l = LifecycleState.AbortedPoisoned ∨ runTrace s l = LifecycleState.ZeroedFreed) := by
+  intro l
+  induction l with
+  | nil =>
+    intro s hs
+    exact hs
+  | cons hd tl ih =>
+    intro s hs
+    change runTrace (stepLifecycle s hd) tl = LifecycleState.AbortedPoisoned ∨
+           runTrace (stepLifecycle s hd) tl = LifecycleState.ZeroedFreed
+    exact ih (stepLifecycle s hd) (sink_step_closed s hd hs)
+
+/-- Factored helper showing any trace starting in `{AbortedPoisoned, ZeroedFreed}` never reaches `SealedActive`. -/
+private def sink_trace_ne_sealed (l : List LifecycleEvent) (s : LifecycleState)
+    (hs : s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) :
+    runTrace s l ≠ LifecycleState.SealedActive := by
+  intro h_eq
+  have h_end := sink_trace_closed l s hs
+  cases h_end with
+  | inl h_ab =>
+    rw [h_ab] at h_eq
+    cases h_eq
+  | inr h_zf =>
+    rw [h_zf] at h_eq
+    cases h_eq
+
+/-- Factored helper showing any single step from `ShutdownClean` enters `{AbortedPoisoned, ZeroedFreed}`. -/
+private def shutdown_step_in_sink (e : LifecycleEvent) :
+    stepLifecycle LifecycleState.ShutdownClean e = LifecycleState.AbortedPoisoned ∨
+    stepLifecycle LifecycleState.ShutdownClean e = LifecycleState.ZeroedFreed := by
+  cases e with
+  | BeginInit   => exact Or.inl rfl
+  | SealSuccess => exact Or.inl rfl
+  | OOMAbort    => exact Or.inl rfl
+  | NormalClose => exact Or.inl rfl
+  | ZeroAndFree => exact Or.inr rfl
+
 /-- Theorem 1: An OOM abort during `PartialInit` transitions to `AbortedPoisoned`, and `ZeroedFreed`
     is a strictly absorbing terminal state across all single events `ev` and all finite traces `evs`. -/
 theorem oom_from_partial_init_is_poisoned (ev : LifecycleEvent) (evs : List LifecycleEvent) :
@@ -166,89 +225,24 @@ theorem oom_from_partial_init_is_poisoned (ev : LifecycleEvent) (evs : List Life
 theorem no_deref_after_partial_oom_abort (evs : List LifecycleEvent) :
     ¬ canDereferencePayload (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) ∧
     ¬ canDereferencePayload (runTrace (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) evs) := by
-  have h_sink_step : ∀ (s : LifecycleState) (e : LifecycleEvent),
-      (s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) →
-      (stepLifecycle s e = LifecycleState.AbortedPoisoned ∨ stepLifecycle s e = LifecycleState.ZeroedFreed) := by
-    intro s e hs
-    cases hs with
-    | inl h_ab =>
-      rw [h_ab]
-      cases e with
-      | BeginInit   => exact Or.inl rfl
-      | SealSuccess => exact Or.inl rfl
-      | OOMAbort    => exact Or.inl rfl
-      | NormalClose => exact Or.inl rfl
-      | ZeroAndFree => exact Or.inr rfl
-    | inr h_zf =>
-      rw [h_zf]
-      cases e <;> exact Or.inr rfl
-  have h_sink_trace : ∀ (l : List LifecycleEvent) (s : LifecycleState),
-      (s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) →
-      (runTrace s l = LifecycleState.AbortedPoisoned ∨ runTrace s l = LifecycleState.ZeroedFreed) := by
-    intro l
-    induction l with
-    | nil =>
-      intro s hs
-      exact hs
-    | cons hd tl ih =>
-      intro s hs
-      change runTrace (stepLifecycle s hd) tl = LifecycleState.AbortedPoisoned ∨
-             runTrace (stepLifecycle s hd) tl = LifecycleState.ZeroedFreed
-      exact ih (stepLifecycle s hd) (h_sink_step s hd hs)
   constructor
   · intro h1
     cases h1
   · intro h_trace
     unfold canDereferencePayload at h_trace
-    have h_end := h_sink_trace evs (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) (Or.inl rfl)
-    cases h_end with
-    | inl h_ab =>
-      rw [h_ab] at h_trace
-      cases h_trace
-    | inr h_zf =>
-      rw [h_zf] at h_trace
-      cases h_trace
+    exact sink_trace_ne_sealed evs (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) (Or.inl rfl) h_trace
 
 /-- Theorem 3: Inductive trace safety — after a partial-initialization OOM abort, clean destructor
     execution is ruled out across the immediate state and all subsequent finite event traces `evs`. -/
 theorem no_shutdown_uaf_on_poisoned_state (evs : List LifecycleEvent) :
     ¬ canRunCleanDestructor (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) ∧
     ¬ canRunCleanDestructor (runTrace (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) evs) := by
-  have h_sink_step : ∀ (s : LifecycleState) (e : LifecycleEvent),
-      (s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) →
-      (stepLifecycle s e = LifecycleState.AbortedPoisoned ∨ stepLifecycle s e = LifecycleState.ZeroedFreed) := by
-    intro s e hs
-    cases hs with
-    | inl h_ab =>
-      rw [h_ab]
-      cases e with
-      | BeginInit   => exact Or.inl rfl
-      | SealSuccess => exact Or.inl rfl
-      | OOMAbort    => exact Or.inl rfl
-      | NormalClose => exact Or.inl rfl
-      | ZeroAndFree => exact Or.inr rfl
-    | inr h_zf =>
-      rw [h_zf]
-      cases e <;> exact Or.inr rfl
-  have h_sink_trace : ∀ (l : List LifecycleEvent) (s : LifecycleState),
-      (s = LifecycleState.AbortedPoisoned ∨ s = LifecycleState.ZeroedFreed) →
-      (runTrace s l = LifecycleState.AbortedPoisoned ∨ runTrace s l = LifecycleState.ZeroedFreed) := by
-    intro l
-    induction l with
-    | nil =>
-      intro s hs
-      exact hs
-    | cons hd tl ih =>
-      intro s hs
-      change runTrace (stepLifecycle s hd) tl = LifecycleState.AbortedPoisoned ∨
-             runTrace (stepLifecycle s hd) tl = LifecycleState.ZeroedFreed
-      exact ih (stepLifecycle s hd) (h_sink_step s hd hs)
   constructor
   · intro h1
     cases h1
   · intro h_trace
     unfold canRunCleanDestructor at h_trace
-    have h_end := h_sink_trace evs (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) (Or.inl rfl)
+    have h_end := sink_trace_closed evs (stepLifecycle LifecycleState.PartialInit LifecycleEvent.OOMAbort) (Or.inl rfl)
     cases h_end with
     | inl h_ab =>
       rw [h_ab] at h_trace
@@ -420,7 +414,7 @@ theorem merkle_dag_semilattice_laws (A B C : Nat → Prop) :
     · intro ha
       exact Or.inl ha
 
-/-- Theorem 13 (Track A — Outward-Rounded Interval Containment & Interior Margin):
+/-- Theorem 13 (Outward-Rounded Interval Containment & Interior Margin):
     For any real step value `x_exact` satisfying interior bounds `δ_ulp ≤ x_exact` and
     `x_exact + δ_ulp ≤ x_max` with rounding radius `0 ≤ δ_ulp`, the outward-rounded interval
     `[x_exact - δ_ulp, x_exact + δ_ulp]` lies inside `[0, x_max]` (`0 ≤ x_exact - δ_ulp`
@@ -454,7 +448,7 @@ def applyWorkerProjection (f : PublicLedgerState → Nat) (pub : PublicLedgerSta
     Definitional lemma stating that `applyWorkerProjection f pub` ignores its `_sec` argument.
     Note: This is a definitional projection lemma, not a formal proof of OS-level process isolation;
     process isolation of the Ed25519 signing seed is enforced at runtime by `IsolatedSignerSubprocess`
-    (`subprocess.Popen`) and verified by regression tests (`test_32`). -/
+    (`subprocess.Popen`) and verified by regression tests (`test_32`, `test_41`). -/
 theorem projection_independent_of_secret
     (f : PublicLedgerState → Nat)
     (pub : PublicLedgerState)
@@ -495,6 +489,72 @@ theorem duhamel_piecewise_contraction_bound
     have h_step1_strict : 0 < (G - alpha) * (alpha * e0 + d1) := mul_pos h_strict_diff h_inner_pos
     linarith
 
+/-- Theorem 16 (Unique Reachability of `SealedActive` from `Uninit`):
+    A finite trace `evs : List LifecycleEvent` starting at `LifecycleState.Uninit` terminates in
+    `LifecycleState.SealedActive` if and only if `evs = [LifecycleEvent.BeginInit, LifecycleEvent.SealSuccess]`. -/
+theorem sealed_active_unique_trace_from_uninit (evs : List LifecycleEvent) :
+    runTrace LifecycleState.Uninit evs = LifecycleState.SealedActive ↔
+    evs = [LifecycleEvent.BeginInit, LifecycleEvent.SealSuccess] := by
+  constructor
+  · intro h
+    cases evs with
+    | nil => cases h
+    | cons e1 rest1 =>
+      cases e1 with
+      | SealSuccess =>
+        exfalso
+        exact sink_trace_ne_sealed rest1 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+      | OOMAbort =>
+        exfalso
+        exact sink_trace_ne_sealed rest1 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+      | NormalClose =>
+        exfalso
+        exact sink_trace_ne_sealed rest1 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+      | ZeroAndFree =>
+        exfalso
+        exact sink_trace_ne_sealed rest1 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+      | BeginInit =>
+        cases rest1 with
+        | nil => cases h
+        | cons e2 rest2 =>
+          cases e2 with
+          | BeginInit =>
+            exfalso
+            exact sink_trace_ne_sealed rest2 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+          | OOMAbort =>
+            exfalso
+            exact sink_trace_ne_sealed rest2 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+          | NormalClose =>
+            exfalso
+            exact sink_trace_ne_sealed rest2 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+          | ZeroAndFree =>
+            exfalso
+            exact sink_trace_ne_sealed rest2 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+          | SealSuccess =>
+            cases rest2 with
+            | nil => rfl
+            | cons e3 rest3 =>
+              exfalso
+              cases e3 with
+              | BeginInit =>
+                exact sink_trace_ne_sealed rest3 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+              | SealSuccess =>
+                exact sink_trace_ne_sealed rest3 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+              | OOMAbort =>
+                exact sink_trace_ne_sealed rest3 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+              | ZeroAndFree =>
+                exact sink_trace_ne_sealed rest3 LifecycleState.AbortedPoisoned (Or.inl rfl) h
+              | NormalClose =>
+                cases rest3 with
+                | nil => cases h
+                | cons e4 rest4 =>
+                  exact sink_trace_ne_sealed rest4
+                    (stepLifecycle LifecycleState.ShutdownClean e4)
+                    (shutdown_step_in_sink e4) h
+  · intro h_evs
+    rw [h_evs]
+    rfl
+
 #print axioms oom_from_partial_init_is_poisoned
 #print axioms no_deref_after_partial_oom_abort
 #print axioms no_shutdown_uaf_on_poisoned_state
@@ -510,5 +570,6 @@ theorem duhamel_piecewise_contraction_bound
 #print axioms patankar_interval_rounding_in_box
 #print axioms projection_independent_of_secret
 #print axioms duhamel_piecewise_contraction_bound
+#print axioms sealed_active_unique_trace_from_uninit
 
 end SharkProtocol

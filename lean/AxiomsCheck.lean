@@ -5,11 +5,11 @@ import TypestateLifecycle
 open SharkProtocol
 
 /-!
-# Unified 41-Theorem Axiom Audit (`lean/AxiomsCheck.lean`)
-Prints the exact axiom dependencies for all 41 theorems across:
+# Unified 42-Theorem Axiom Audit (`lean/AxiomsCheck.lean`)
+Prints the exact axiom dependencies for all 42 theorems across:
 1. `lean/BoundaryVerification.lean` (9 theorems)
 2. `lean/ExistenceVerification.lean` (17 theorems)
-3. `lean/TypestateLifecycle.lean` (15 theorems)
+3. `lean/TypestateLifecycle.lean` (16 theorems)
 
 Verified in CI via `lake env lean lean/AxiomsCheck.lean | python3 tools/check_lean_axioms.py`
 to ensure every theorem depends only on a subset of `{propext, Classical.choice, Quot.sound}`
@@ -46,7 +46,7 @@ with zero `sorryAx` and zero custom axioms.
 #print axioms dPsi_dt_4D_neg_at_ceiling
 #print axioms existence_box_8face_nagumo_certificate
 
--- Module 3: TypestateLifecycle (15 theorems)
+-- Module 3: TypestateLifecycle (16 theorems)
 #print axioms SharkProtocol.oom_from_partial_init_is_poisoned
 #print axioms SharkProtocol.no_deref_after_partial_oom_abort
 #print axioms SharkProtocol.no_shutdown_uaf_on_poisoned_state
@@ -62,3 +62,4 @@ with zero `sorryAx` and zero custom axioms.
 #print axioms SharkProtocol.patankar_interval_rounding_in_box
 #print axioms SharkProtocol.projection_independent_of_secret
 #print axioms SharkProtocol.duhamel_piecewise_contraction_bound
+#print axioms SharkProtocol.sealed_active_unique_trace_from_uninit

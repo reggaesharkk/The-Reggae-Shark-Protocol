@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deterministic MANIFEST_SHA256.txt generator for The Reggae Shark Protocol (v1.3.1).
+Deterministic MANIFEST_SHA256.txt generator for The Reggae Shark Protocol (v1.3.2).
 
 Reads exact staged git blob bytes via `git show :<path>` (or `git show HEAD:<path>` / disk bytes
 if outside git) so Windows `core.autocrlf` working-tree line-ending conversions never corrupt hashes.

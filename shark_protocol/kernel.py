@@ -1,30 +1,32 @@
 """
 Layer 1, Layer 1B, Layer 2, and Layer 3 Core Verification Kernel (`shark_protocol/kernel.py`)
 Author: Prince Upadhyay (ORCID: 0009-0002-1170-4487)
-Version: 1.3.1 (Red-Team Tested Edition | Concept DOI: 10.5281/zenodo.23618032 | v4 DOI: 10.5281/zenodo.23635351 | v3 DOI: 10.5281/zenodo.23624605)
+Version: 1.3.2 (Concept DOI: 10.5281/zenodo.23618032)
 
-What Is and Is Not Modelled (Epistemic Firewall):
-- Layer 1 (`SharkProtocolEngine` + `Ed25519AuthoritySigner`): Enforces the `intentseal-vrk-claim-v2`
-  schema anchored at the frozen VRK v0.3.1 trust root (`f010a99d...05a0d0f`, DOI: 10.5281/zenodo.23018459),
-  committing every record to `prev_hash`, `parent_hashes`, `prompt_sha256`, `response_sha256`,
-  `lrsc_sha256`, `uncompressed_ring_sha256`, on-disk verified `evidence_root`, and an RFC 8032 Ed25519
-  digital signature (`signer_pubkey`, `ed25519_signature`). Supports N-way commutative, associative,
-  and idempotent Merkle-DAG join-semilattice reconciliation (`merge_divergent_ledgers`) with strict
-  parent-hash membership verification.
-- Layer 1B (`RequestSlot` & `WorkerEpochGuard`): Formalizes an application-level 6-state request
-  lifecycle automaton (`UNINIT -> PARTIAL_INIT -> SEALED_ACTIVE -> SHUTDOWN_CLEAN -> ZEROED_FREED`,
-  with `OOM_ABORT -> ABORTED_POISONED` and `ZEROED_FREED` strictly terminal/absorbing) and monotonic
-  worker-epoch isolation (`slot_epoch == worker_epoch`), with private mutex-encapsulated `_state`,
-  `_is_zeroed`, `_fence_seq` and hierarchical lock ordering (`WorkerEpochGuard._lock -> RequestSlot._lock`).
-- Layer 2 (`step_ode`, `step_ode_patankar_interval`, `evaluate_basin_separatrix_guard`): Integrates
-  the 4D soft-wall ODE system (gamma, H_obs, I_dot, Psi) from Program 08 (DOI: 10.5281/zenodo.23608244),
-  pairing adaptive sub-stepped RK4 with a Patankar-Euler + 2-ULP outward-rounded IEEE-754 interval
-  integrator (with Python runtime float64 subnormal floor `FLOAT64_NORMAL_MIN = 2.2250738585072014e-308`)
-  and a fail-closed Gronwall separatrix floor guard.
-- Layer 3 (`LRSCCompressor`): Projects context onto the M=99 odd-ring near-Nyquist basis and retains
-  the K=11 witness subset S_11 = {0,1,3,42..49} (11/99 = 1/9 ratio, DOI: 10.17605/OSF.IO/NM5BW &
-  10.17605/OSF.IO/JAK5X), computing a bounded-domain local attention sensitivity proxy (following Kim,
-  Papamakarios & Mnih, ICML 2021) and binding distinct compressed/uncompressed digests to the prompt.
+Architectural Overview & Epistemic Firewall:
+- Layer 1 (`SharkProtocolEngine`, `Ed25519AuthoritySigner`, `IsolatedSignerSubprocess`):
+  Enforces the `intentseal-vrk-claim-v2` schema anchored at the frozen VRK v0.3.1 trust root
+  (`f010a99d...05a0d0f`, DOI: 10.5281/zenodo.23018459), committing every record to `prev_hash`,
+  `parent_hashes`, `prompt_sha256`, `response_sha256`, `lrsc_sha256`, `uncompressed_ring_sha256`,
+  on-disk verified `evidence_root`, and an RFC 8032 Ed25519 digital signature (`signer_pubkey`,
+  `ed25519_signature`). Supports timestamped signed head commitments (`intentseal-vrk-head-v2`
+  with `issued_at`), mandatory head + minimum-length export verification (`verify_exported_ledger`),
+  stateful child-process key isolation (`IsolatedSignerSubprocess` enforcing `prev_hash == last_signed_digest`
+  and child-only key file or ephemeral key generation), and N-way associative Merkle-DAG reconciliation.
+- Layer 1B (`RequestSlot` & `WorkerEpochGuard`):
+  Enforces a 6-state request lifecycle automaton (`UNINIT -> PARTIAL_INIT -> SEALED_ACTIVE ->
+  SHUTDOWN_CLEAN -> ZEROED_FREED`, with `OOM_ABORT -> ABORTED_POISONED` and strictly absorbing
+  terminal `ZEROED_FREED`) and monotonic worker-epoch isolation (`slot_epoch == worker_epoch`),
+  verified state-for-state against `lean/TypestateLifecycle.lean` (`data/lean_transition_table.json`).
+- Layer 2 (`step_ode`, `step_ode_patankar_interval`, `step_ode_patankar_mp_interval`):
+  Integrates the 4D soft-wall ODE system (gamma, H_obs, I_dot, Psi) inside B_4 (DOI: 10.5281/zenodo.23608244),
+  distinguishing the fast runtime float64 2-ULP check (`inside_B4_checked`) from the 200-bit
+  outward-rounded `mpmath.iv` interval enclosure (`inside_B4_mp_iv_certified`).
+- Layer 3 (`LRSCCompressor`):
+  Projects context onto the M=99 odd-ring near-Nyquist basis and retains the K=11 witness subset
+  S_11 = {0,1,3,42..49} (11/99 = 1/9 ratio, DOI: 10.17605/OSF.IO/NM5BW & 10.17605/OSF.IO/JAK5X),
+  evaluating linear perturbation budget scaling under an assumed local sensitivity parameter `L >= 0`
+  (citing Kim, Papamakarios & Mnih, ICML 2021).
 """
 
 from __future__ import annotations
@@ -35,13 +37,15 @@ import hashlib
 import json
 import math
 import os
+import re
+import subprocess
+import sys
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
-import subprocess
-import sys
 import mpmath as mp
 import numpy as np
 
@@ -61,6 +65,8 @@ REQUIRED_VRK_ROLES: Dict[str, frozenset[str]] = {
     "INTERVAL_CERTIFIED_RESULT": frozenset({"definition", "interval_certificate", "verifier"}),
     "ANALYTIC_THEOREM": frozenset({"definition", "proof", "scope_statement", "independent_verification"}),
 }
+
+ISO8601_UTC_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -85,20 +91,36 @@ def _is_hex64(val: Any) -> bool:
     return all(c in "0123456789abcdef" for c in val)
 
 
-# Retired v1.2.0/v1.3.0 public-seed SHA-256 and public key (explicitly revoked and blocked in v1.3.1)
-RETIRED_V120_SEED_SHA256 = "914f28eabb2b93fb15bf6ad071120c21e8dd5a8a5e4825f053a1962b101901ec"
-RETIRED_V120_PUBKEY_HEX = "e3ad81062fa39a869b798e3ab3a7195316dbe7de0e5e0da22a7ff4194065b74c"
+def _is_valid_iso8601_utc(val: Any) -> bool:
+    if not isinstance(val, str) or not ISO8601_UTC_PATTERN.match(val):
+        return False
+    try:
+        datetime.strptime(val, "%Y-%m-%dT%H:%M:%SZ")
+        return True
+    except ValueError:
+        return False
+
+
+# Built-in denylist for publicly known test seed and public key
+REVOKED_PUBLIC_SEED_SHA256 = "914f28eabb2b93fb15bf6ad071120c21e8dd5a8a5e4825f053a1962b101901ec"
+REVOKED_PUBLIC_PUBKEY_HEX = "e3ad81062fa39a869b798e3ab3a7195316dbe7de0e5e0da22a7ff4194065b74c"
+RETIRED_V120_SEED_SHA256 = REVOKED_PUBLIC_SEED_SHA256
+RETIRED_V120_PUBKEY_HEX = REVOKED_PUBLIC_PUBKEY_HEX
+
 WP19_SEGMENTS_EXPECTED_SHA256 = "a78a67c8ea8f4950dcf8bad6e76ebb7fe6362742ac1dbc63881cc14311d99319"
+
+# Pinned reference release head hash published in data/release_head.json
+RELEASE_REFERENCE_HEAD_HASH = "866e1919b5a3e9e1e896496f735fdc94846e03497533b74f6fe3a5a96608ee5b"
 
 
 class Ed25519AuthoritySigner:
     """
-    RFC 8032 Ed25519 digital signature authority for VRK v0.3.1 ledger records (Task A & B Remediation).
+    RFC 8032 Ed25519 digital signature authority for VRK v0.3.1 ledger records.
     - Requires the `cryptography` C-extension backend (`Ed25519PrivateKey` / `Ed25519PublicKey`) and
-      fails closed if unavailable (no non-constant-time pure-Python fallback).
+      fails closed if unavailable (no pure-Python fallback).
     - Requires an explicit 32-byte `seed` or `SHARK_ED25519_SEED_HEX` environment variable; refuses
       to start (`RuntimeError`) if no signing key is configured.
-    - Rejects the retired v1.2.0 public seed (`RETIRED_V120_SEED_SHA256`).
+    - Rejects known public denylisted seeds (`REVOKED_PUBLIC_SEED_SHA256`).
     """
 
     def __init__(self, seed: Optional[bytes] = None) -> None:
@@ -115,8 +137,8 @@ class Ed25519AuthoritySigner:
         if not isinstance(seed, (bytes, bytearray)) or len(seed) != 32:
             raise ValueError("Ed25519 seed must be exactly 32 bytes.")
         raw_seed = bytes(seed)
-        if hashlib.sha256(raw_seed).hexdigest() == RETIRED_V120_SEED_SHA256:
-            raise ValueError("Refusing to initialize Ed25519AuthoritySigner with retired v1.2.0 public seed.")
+        if hashlib.sha256(raw_seed).hexdigest() == REVOKED_PUBLIC_SEED_SHA256:
+            raise ValueError("Refusing to initialize Ed25519AuthoritySigner with revoked public seed.")
         try:
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
             from cryptography.hazmat.primitives import serialization
@@ -135,16 +157,23 @@ class Ed25519AuthoritySigner:
     def public_key_hex(self) -> str:
         return self._pub_bytes.hex()
 
-    def sign_digest_hex(self, digest_hex: str) -> str:
+    def sign_digest_hex(self, digest_hex: str, *, prev_hash: Optional[str] = None) -> str:
         if not _is_hex64(digest_hex):
             raise ValueError("sign_digest_hex requires a 64-character lowercase hex SHA-256 digest.")
+        if prev_hash is not None and not _is_hex64(prev_hash):
+            raise ValueError("prev_hash must be a 64-character lowercase hex SHA-256 digest.")
         msg = digest_hex.encode("ascii")
         return self._priv_obj.sign(msg).hex()
+
+    def sign_head_digest_hex(self, head_digest_hex: str, *, head_hash: str, ledger_length: int) -> str:
+        if not _is_hex64(head_digest_hex) or not _is_hex64(head_hash) or ledger_length < 1:
+            raise ValueError("Invalid head digest, head_hash, or ledger_length.")
+        return self._priv_obj.sign(head_digest_hex.encode("ascii")).hex()
 
     @staticmethod
     def verify_digest_signature(pubkey_hex: str, digest_hex: str, signature_hex: str) -> bool:
         try:
-            if not isinstance(pubkey_hex, str) or pubkey_hex.lower() == RETIRED_V120_PUBKEY_HEX:
+            if not isinstance(pubkey_hex, str) or pubkey_hex.lower() == REVOKED_PUBLIC_PUBKEY_HEX:
                 return False
             pub_bytes = bytes.fromhex(pubkey_hex)
             sig_bytes = bytes.fromhex(signature_hex)
@@ -164,16 +193,32 @@ class Ed25519AuthoritySigner:
 
 _SIGNER_DAEMON_CODE = r"""
 import json, os, sys
-from shark_protocol.kernel import Ed25519AuthoritySigner
+from pathlib import Path
+from shark_protocol.kernel import Ed25519AuthoritySigner, VRK_TRUST_ROOT_DIGEST, _is_hex64
 
 ephemeral_flag = os.environ.pop("SHARK_ISOLATED_SIGNER_EPHEMERAL", "").strip()
-seed_hex = os.environ.pop("SHARK_ISOLATED_SIGNER_SEED_HEX", "").strip()
-if ephemeral_flag == "1" and not seed_hex:
+seed_file_str = os.environ.pop("SHARK_ISOLATED_SIGNER_SEED_FILE", "").strip()
+unlink_seed_file = os.environ.pop("SHARK_ISOLATED_SIGNER_UNLINK_FILE", "").strip() == "1"
+last_signed_digest = os.environ.pop("SHARK_ISOLATED_SIGNER_INIT_PREV", VRK_TRUST_ROOT_DIGEST).strip()
+signed_count = 0
+
+if seed_file_str:
+    sf_path = Path(seed_file_str)
+    raw_content = sf_path.read_bytes()
+    if unlink_seed_file:
+        try:
+            sf_path.unlink()
+        except Exception:
+            pass
+    if len(raw_content) == 32:
+        seed = raw_content
+    else:
+        txt = raw_content.decode("utf-8").strip()
+        seed = bytes.fromhex(txt)
+elif ephemeral_flag == "1":
     seed = os.urandom(32)
-elif seed_hex:
-    seed = bytes.fromhex(seed_hex)
 else:
-    raise RuntimeError("IsolatedSignerSubprocess daemon requires seed or ephemeral flag.")
+    raise RuntimeError("IsolatedSignerSubprocess daemon requires seed_file or generate_ephemeral=True.")
 
 signer = Ed25519AuthoritySigner(seed=seed)
 del seed
@@ -185,61 +230,130 @@ for raw_line in sys.stdin:
     req = json.loads(line)
     cmd = req.get("cmd")
     if cmd == "PUBKEY":
-        sys.stdout.write(json.dumps({"ok": True, "pubkey": signer.public_key_hex}) + "\n")
+        sys.stdout.write(json.dumps({
+            "ok": True,
+            "pubkey": signer.public_key_hex,
+            "last_signed_digest": last_signed_digest,
+            "signed_count": signed_count,
+        }) + "\n")
         sys.stdout.flush()
     elif cmd == "SIGN":
         d = str(req.get("digest", ""))
-        if len(d) != 64 or not all(c in "0123456789abcdef" for c in d):
+        prev_h = str(req.get("prev_hash", ""))
+        if not _is_hex64(d):
             sys.stdout.write(json.dumps({"ok": False, "error": "Invalid 64-hex digest"}) + "\n")
+        elif not _is_hex64(prev_h):
+            sys.stdout.write(json.dumps({"ok": False, "error": "Missing or invalid 64-hex prev_hash"}) + "\n")
+        elif prev_h != last_signed_digest:
+            sys.stdout.write(json.dumps({
+                "ok": False,
+                "error": f"Chain continuity violation: prev_hash {prev_h} does not match child last_signed_digest {last_signed_digest}",
+            }) + "\n")
         else:
             sig = signer.sign_digest_hex(d)
-            sys.stdout.write(json.dumps({"ok": True, "signature": sig, "pubkey": signer.public_key_hex}) + "\n")
+            last_signed_digest = d
+            signed_count += 1
+            sys.stdout.write(json.dumps({
+                "ok": True,
+                "signature": sig,
+                "pubkey": signer.public_key_hex,
+                "last_signed_digest": last_signed_digest,
+                "signed_count": signed_count,
+            }) + "\n")
+        sys.stdout.flush()
+    elif cmd == "SIGN_HEAD":
+        hd = str(req.get("head_digest", ""))
+        hh = str(req.get("head_hash", ""))
+        ll = int(req.get("ledger_length", -1))
+        if not _is_hex64(hd) or not _is_hex64(hh):
+            sys.stdout.write(json.dumps({"ok": False, "error": "Invalid 64-hex head_digest or head_hash"}) + "\n")
+        elif hh != last_signed_digest or ll != signed_count or signed_count < 1:
+            sys.stdout.write(json.dumps({
+                "ok": False,
+                "error": f"Head commitment mismatch: requested (head_hash={hh}, len={ll}) vs child (last_signed_digest={last_signed_digest}, count={signed_count})",
+            }) + "\n")
+        else:
+            sig = signer.sign_digest_hex(hd)
+            sys.stdout.write(json.dumps({
+                "ok": True,
+                "signature": sig,
+                "pubkey": signer.public_key_hex,
+            }) + "\n")
         sys.stdout.flush()
     elif cmd == "SHUTDOWN":
         sys.stdout.write(json.dumps({"ok": True, "status": "SHUTDOWN_ACK"}) + "\n")
         sys.stdout.flush()
         break
     else:
-        sys.stdout.write(json.dumps({"ok": False, "error": "Forbidden IPC command: only PUBKEY, SIGN, SHUTDOWN allowed"}) + "\n")
+        sys.stdout.write(json.dumps({
+            "ok": False,
+            "error": "Forbidden IPC command: only PUBKEY, SIGN, SIGN_HEAD, SHUTDOWN allowed",
+        }) + "\n")
         sys.stdout.flush()
 """
 
 
 class IsolatedSignerSubprocess:
     """
-    Track B (Multi-Principal OS Process Isolation for Ed25519 Signing):
-    Spawns a separate OS child process (`subprocess.Popen`) that either generates its own
-    32-byte key in-child (`generate_ephemeral=True`) or loads a configured seed in-child,
-    returning ONLY the 32-byte public key (`PUBKEY`) to the parent process.
-    If `seed is None`, `generate_ephemeral is False`, and `SHARK_ED25519_SEED_HEX` is unset,
-    raises `RuntimeError` and refuses to start.
+    Child-Process Key Isolation & Stateful Forward-Chain Enforcement (`IsolatedSignerSubprocess`):
+    - Spawns a separate OS child process (`subprocess.Popen`) that loads a key directly from a
+      child-read `seed_file` or generates an ephemeral key in-child (`generate_ephemeral=True`)
+      so `SHARK_ED25519_SEED_HEX` does not need to exist in the parent gateway environment.
+    - Enforces stateful forward-chain continuity inside the child: the child refuses any `SIGN`
+      request whose `prev_hash` does not equal its `last_signed_digest` (initialized to
+      `initial_prev_hash = VRK_TRUST_ROOT_DIGEST`), and refuses any `SIGN_HEAD` request whose
+      `(head_hash, ledger_length)` does not match the child's current tip and count.
     """
 
-    def __init__(self, seed: Optional[bytes] = None, *, generate_ephemeral: bool = False) -> None:
+    def __init__(
+        self,
+        seed: Optional[bytes] = None,
+        *,
+        seed_file: Optional[Union[str, Path]] = None,
+        generate_ephemeral: bool = False,
+        initial_prev_hash: str = VRK_TRUST_ROOT_DIGEST,
+    ) -> None:
+        if not _is_hex64(initial_prev_hash):
+            raise ValueError("initial_prev_hash must be a 64-character lowercase hex SHA-256 digest.")
+
         env = dict(os.environ)
         env["PYTHONPATH"] = str(REPO_ROOT)
         env.pop("SHARK_ED25519_SEED_HEX", None)
-        if seed is not None:
+        env["SHARK_ISOLATED_SIGNER_INIT_PREV"] = initial_prev_hash
+
+        temp_seed_path: Optional[Path] = None
+        if seed_file is not None:
+            sf = Path(seed_file).resolve()
+            if not sf.is_file():
+                raise FileNotFoundError(f"IsolatedSignerSubprocess seed_file not found: {sf}")
+            env["SHARK_ISOLATED_SIGNER_SEED_FILE"] = str(sf)
+            env["SHARK_ISOLATED_SIGNER_UNLINK_FILE"] = "0"
+        elif seed is not None:
             if not isinstance(seed, (bytes, bytearray)) or len(seed) != 32:
                 raise ValueError("Ed25519 seed must be exactly 32 bytes.")
-            if hashlib.sha256(bytes(seed)).hexdigest() == RETIRED_V120_SEED_SHA256:
-                raise ValueError("Refusing to initialize IsolatedSignerSubprocess with retired v1.2.0 seed.")
-            env["SHARK_ISOLATED_SIGNER_SEED_HEX"] = bytes(seed).hex()
+            if hashlib.sha256(bytes(seed)).hexdigest() == REVOKED_PUBLIC_SEED_SHA256:
+                raise ValueError("Refusing to initialize IsolatedSignerSubprocess with revoked public seed.")
+            fd, tmp_name = tempfile.mkstemp(prefix="shark_child_seed_", suffix=".key")
+            try:
+                os.chmod(tmp_name, 0o600)
+                os.write(fd, bytes(seed))
+            finally:
+                os.close(fd)
+            temp_seed_path = Path(tmp_name)
+            env["SHARK_ISOLATED_SIGNER_SEED_FILE"] = str(temp_seed_path)
+            env["SHARK_ISOLATED_SIGNER_UNLINK_FILE"] = "1"
         elif generate_ephemeral:
             env["SHARK_ISOLATED_SIGNER_EPHEMERAL"] = "1"
         else:
-            env_hex = os.environ.get("SHARK_ED25519_SEED_HEX", "").strip()
-            if not env_hex:
+            env_seed_file = os.environ.get("SHARK_ISOLATED_SIGNER_SEED_FILE", "").strip()
+            if env_seed_file and Path(env_seed_file).is_file():
+                env["SHARK_ISOLATED_SIGNER_SEED_FILE"] = str(Path(env_seed_file).resolve())
+                env["SHARK_ISOLATED_SIGNER_UNLINK_FILE"] = "0"
+            else:
                 raise RuntimeError(
-                    "No signing key configured for IsolatedSignerSubprocess: set SHARK_ED25519_SEED_HEX, "
-                    "pass an explicit seed, or set generate_ephemeral=True."
+                    "No signing key configured for IsolatedSignerSubprocess: pass seed_file, "
+                    "set generate_ephemeral=True, or pass an explicit 32-byte seed."
                 )
-            raw_env = bytes.fromhex(env_hex)
-            if len(raw_env) != 32:
-                raise ValueError("SHARK_ED25519_SEED_HEX must be 32 bytes (64 hex chars).")
-            if hashlib.sha256(raw_env).hexdigest() == RETIRED_V120_SEED_SHA256:
-                raise ValueError("Refusing to initialize IsolatedSignerSubprocess with retired v1.2.0 seed.")
-            env["SHARK_ISOLATED_SIGNER_SEED_HEX"] = raw_env.hex()
 
         self._lock = threading.RLock()
         self._proc = subprocess.Popen(
@@ -252,21 +366,39 @@ class IsolatedSignerSubprocess:
         )
         # Parent principal holds NO private seed attribute (`_seed` is None)
         self._seed = None
-        resp = self._rpc({"cmd": "PUBKEY"})
+        self._initial_prev_hash = initial_prev_hash
+        try:
+            resp = self._rpc({"cmd": "PUBKEY"})
+        except Exception:
+            if temp_seed_path is not None and temp_seed_path.exists():
+                with contextlib.suppress(Exception):
+                    temp_seed_path.unlink()
+            self.close()
+            raise
         if not resp.get("ok"):
             self.close()
             raise RuntimeError(f"Failed to initialize IsolatedSignerSubprocess: {resp}")
         self._pub_hex: str = str(resp["pubkey"])
+        self._last_signed_digest: str = str(resp.get("last_signed_digest", initial_prev_hash))
+        self._signed_count: int = int(resp.get("signed_count", 0))
 
     def _rpc(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             if self._proc.poll() is not None or self._proc.stdin is None or self._proc.stdout is None:
-                raise RuntimeError("IsolatedSignerSubprocess is closed or terminated.")
-            self._proc.stdin.write(json.dumps(payload, sort_keys=True) + chr(10))
+                err_out = ""
+                if self._proc.stderr is not None:
+                    with contextlib.suppress(Exception):
+                        err_out = self._proc.stderr.read().strip()
+                raise RuntimeError(f"IsolatedSignerSubprocess is closed or terminated. {err_out}".strip())
+            self._proc.stdin.write(json.dumps(payload, sort_keys=True) + "\n")
             self._proc.stdin.flush()
             out_line = self._proc.stdout.readline()
             if not out_line:
-                raise RuntimeError("IsolatedSignerSubprocess EOF on IPC pipe.")
+                err_out = ""
+                if self._proc.stderr is not None:
+                    with contextlib.suppress(Exception):
+                        err_out = self._proc.stderr.read().strip()
+                raise RuntimeError(f"IsolatedSignerSubprocess EOF on IPC pipe. {err_out}".strip())
             return json.loads(out_line)
 
     @property
@@ -277,14 +409,49 @@ class IsolatedSignerSubprocess:
     def public_key_hex(self) -> str:
         return self._pub_hex
 
-    def sign_digest_hex(self, digest_hex: str) -> str:
-        resp = self._rpc({"cmd": "SIGN", "digest": digest_hex})
-        if not resp.get("ok"):
-            raise ValueError(f"IsolatedSignerSubprocess rejected SIGN request: {resp.get('error')}")
-        return str(resp["signature"])
+    @property
+    def last_signed_digest(self) -> str:
+        with self._lock:
+            return self._last_signed_digest
+
+    @property
+    def signed_count(self) -> int:
+        with self._lock:
+            return self._signed_count
+
+    def sign_digest_hex(self, digest_hex: str, *, prev_hash: Optional[str] = None) -> str:
+        """
+        Request child to sign `digest_hex` extending `prev_hash`.
+        The child process enforces `prev_hash == child.last_signed_digest` and updates
+        its internal `last_signed_digest` to `digest_hex` upon signing.
+        """
+        with self._lock:
+            effective_prev = self._initial_prev_hash if prev_hash is None else str(prev_hash)
+            resp = self._rpc({"cmd": "SIGN", "digest": digest_hex, "prev_hash": effective_prev})
+            if not resp.get("ok"):
+                raise ValueError(f"IsolatedSignerSubprocess rejected SIGN request: {resp.get('error')}")
+            self._last_signed_digest = str(resp["last_signed_digest"])
+            self._signed_count = int(resp["signed_count"])
+            return str(resp["signature"])
+
+    def sign_head_digest_hex(self, head_digest_hex: str, *, head_hash: str, ledger_length: int) -> str:
+        """
+        Request child to sign a head commitment. The child verifies that `head_hash` equals
+        its `last_signed_digest` and `ledger_length` equals its `signed_count`.
+        """
+        with self._lock:
+            resp = self._rpc({
+                "cmd": "SIGN_HEAD",
+                "head_digest": head_digest_hex,
+                "head_hash": head_hash,
+                "ledger_length": int(ledger_length),
+            })
+            if not resp.get("ok"):
+                raise ValueError(f"IsolatedSignerSubprocess rejected SIGN_HEAD request: {resp.get('error')}")
+            return str(resp["signature"])
 
     def send_raw_command(self, cmd_name: str) -> Dict[str, Any]:
-        """Used by red-team tests to verify that `EXPORT_KEY` or unknown commands are rejected."""
+        """Verify that unauthorized IPC commands (such as `EXPORT_SECRET_KEY`) are rejected."""
         return self._rpc({"cmd": cmd_name})
 
     def close(self) -> None:
@@ -330,12 +497,15 @@ def evaluate_wp19_piecewise_duhamel_study(
     dps: int = 60,
 ) -> Dict[str, Any]:
     """
-    Track C (Illustrative Parameter Study for Program 05 WP19 120-Segment Duhamel Recurrence):
-    Loads assumed segment parameters from the SHA-256-verified `data/wp19_segments.json` file
-    (citing `DOI: 10.5281/zenodo.23034545`) and evaluates the 120-segment Duhamel recurrence
+    Illustrative Parameter Study for Program 05 WP19 120-Segment Duhamel Recurrence:
+    Loads assumed segment parameters from `data/wp19_segments.json` (SHA-256:
+    `a78a67c8ea8f4950dcf8bad6e76ebb7fe6362742ac1dbc63881cc14311d99319`, citing
+    `DOI: 10.5281/zenodo.23034545`) and evaluates the 120-segment Duhamel recurrence
     `E_{k+1} = exp(mu_eff * dt) * E_k + d_k` in 200-bit outward-rounded `mpmath.iv` arithmetic
     (`lean/TypestateLifecycle.lean`: `duhamel_piecewise_contraction_bound`).
-    Note: This is an illustrative parameter study given the assumed per-segment rate in
+    Note: The in-repo SHA-256 check guards against accidental file corruption, while external
+    tamper resistance is anchored by the hash published in the release notes and Zenodo record.
+    This is an illustrative parameter study given the assumed per-segment rate in
     `data/wp19_segments.json`, not a certificate of the Navier-Stokes Galerkin chain or continuum PDE.
     """
     target_path = data_path if data_path is not None else (REPO_ROOT / "data/wp19_segments.json")
@@ -415,7 +585,6 @@ def evaluate_wp19_piecewise_duhamel_study(
     }
 
 
-# Keep backwards-compatible alias pointing to the parameter study
 certify_wp19_piecewise_duhamel_bridge = evaluate_wp19_piecewise_duhamel_study
 
 
@@ -452,9 +621,9 @@ class RequestSlot:
     """
     Thread-safe request slot enforcing the 6-state lifecycle typestate automaton
     formalized in `lean/TypestateLifecycle.lean`.
-    Audit Item 5 Fix: `ZEROED_FREED` is a strictly absorbing terminal state (once in
-    `ZEROED_FREED`, any subsequent transition raises `TypestateViolationError` while keeping
-    `_state == LifecycleState.ZEROED_FREED`).
+    `ZEROED_FREED` is a strictly absorbing terminal state: once in `ZEROED_FREED`,
+    any subsequent transition raises `TypestateViolationError` while keeping
+    `_state == LifecycleState.ZEROED_FREED`.
     """
 
     def __init__(
@@ -680,14 +849,12 @@ class LRSCCompressor:
     Layer 3: Low-Rank Spectral Context Memory (LRSC 11/99 = 1/9).
     Implements the odd-ring near-Nyquist cyclic projection (M=99, K=11) from
     Program 04 (DOI: 10.17605/OSF.IO/NM5BW and DOI: 10.17605/OSF.IO/JAK5X).
-    Audit Item 2 & Item 5 Fixes:
     - Breaks scalar-multiple normalization degeneracy via position-and-byte phase coupling so
       single-character (`"a"`, `"b"`, `"Z"`) and constant-byte (`"aaaa"`, `"zzzz"`) prompts map
       to distinct ring directions, distinct `witness_vector` entries, and distinct `lrsc_sha256`
       and `uncompressed_fallback_sha256` digests, while also binding `prompt_sha256`.
     - Reports `attention_perturbation_upper_bound` as a local bounded-domain sensitivity proxy
-      on the unit ball `||x||_2 <= 1` (since global dot-product softmax attention is not globally
-      Lipschitz on R^d; Kim, Papamakarios & Mnih, ICML 2021).
+      on the unit ball `||x||_2 <= 1` (Kim, Papamakarios & Mnih, ICML 2021).
     """
     M_RING: int = 99
     K_WITNESS: int = 11
@@ -705,7 +872,6 @@ class LRSCCompressor:
         self.null_space_threshold = float(null_space_threshold)
         self.attn_weight_norm = float(attn_weight_norm)
         self.attn_head_dim = int(attn_head_dim)
-        # Local bounded-domain sensitivity proxy on ||x||_2 <= 1 (Kim, Papamakarios & Mnih, ICML 2021)
         self.attn_lipschitz_constant = self.attn_weight_norm * (
             1.0 + (2.0 * (self.attn_weight_norm ** 2)) / math.sqrt(float(self.attn_head_dim))
         )
@@ -739,9 +905,6 @@ class LRSCCompressor:
             raw_ring = vec.copy()
         else:
             raw_ring = np.zeros(self.M_RING, dtype=np.float64)
-            # Inject a fixed non-zero baseline anchor on witness slot 0 so scalar multiples
-            # (such as 1-byte "a", "b", "Z" or constant "aaaa", "zzzz") change the vector's
-            # direction in R^99 rather than cancelling out under L2 unit normalization.
             raw_ring[0] = 64.0
             if len(raw_bytes) == 0:
                 raw_ring[1] = 1.0
@@ -854,6 +1017,7 @@ class SharkProtocolEngine:
         lam_lucid: float = 0.30,
         kappa_meta: float = 2.50,
         signing_seed: Optional[bytes] = None,
+        signer: Optional[Union[Ed25519AuthoritySigner, IsolatedSignerSubprocess]] = None,
         ledger_path: Optional[Path] = None,
     ) -> None:
         self.a = float(a)
@@ -883,9 +1047,16 @@ class SharkProtocolEngine:
         self.state = np.array([2.05, 95.0, 4.0, 0.05], dtype=np.float64)
         self.time_t = 0.0
 
-        self.signer = Ed25519AuthoritySigner(seed=signing_seed)
+        self.signer: Union[Ed25519AuthoritySigner, IsolatedSignerSubprocess] = (
+            signer if signer is not None else Ed25519AuthoritySigner(seed=signing_seed)
+        )
         self.ledger_path: Optional[Path] = Path(ledger_path) if ledger_path is not None else None
         self.ledger: List[Dict[str, Any]] = []
+        if self.ledger_path is not None and self.ledger_path.exists():
+            for raw_line in self.ledger_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if line:
+                    self.ledger.append(json.loads(line))
         self.epoch_guard = WorkerEpochGuard(initial_epoch=1)
         self.lrsc = LRSCCompressor()
         self._lock = threading.RLock()
@@ -894,7 +1065,12 @@ class SharkProtocolEngine:
     def public_key_hex(self) -> str:
         return self.signer.public_key_hex
 
-    def compute_i_max_4d(self, P_0: Optional[float] = None, lam_sim: Optional[float] = None, lam_lucid: Optional[float] = None) -> float:
+    def compute_i_max_4d(
+        self,
+        P_0: Optional[float] = None,
+        lam_sim: Optional[float] = None,
+        lam_lucid: Optional[float] = None,
+    ) -> float:
         p0 = self.P_0 if P_0 is None else float(P_0)
         ls = self.lam_sim if lam_sim is None else float(lam_sim)
         ll = self.lam_lucid if lam_lucid is None else float(lam_lucid)
@@ -991,9 +1167,11 @@ class SharkProtocolEngine:
         P_0: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        Unconditionally box-invariant Patankar-Euler fractional production-destruction update
-        coupled with outward-rounded IEEE-754 interval enclosures (`[lo, hi]`) and Python
-        runtime float64 subnormal/FTZ floor clamping (`FLOAT64_NORMAL_MIN`).
+        Box-invariant Patankar-Euler fractional production-destruction update in IEEE-754 float64
+        with 2-ULP outward widening (`[interval_lo, interval_hi]`) and subnormal floor clamping
+        (`FLOAT64_NORMAL_MIN`).
+        Reports `inside_B4_checked` (computed dynamically from the float64 bounds). Rigorous
+        outward-rounded 200-bit interval certification is provided by `step_ode_patankar_mp_interval`.
         """
         with self._lock:
             if dt <= 0.0:
@@ -1055,8 +1233,14 @@ class SharkProtocolEngine:
 
             self.state = 0.5 * (y_lo + y_hi)
             self.time_t += dt
-            self.assert_inside_box_b4(y_lo, P_0=p0)
-            self.assert_inside_box_b4(y_hi, P_0=p0)
+            lo_ok = self.assert_inside_box_b4(y_lo, P_0=p0)
+            hi_ok = self.assert_inside_box_b4(y_hi, P_0=p0)
+            inside_checked = bool(
+                lo_ok and hi_ok
+                and np.all(y_lo >= 0.0)
+                and np.all(y_hi <= ceilings)
+                and np.all(y_lo <= y_hi)
+            )
             max_width = float(np.max(y_hi - y_lo))
 
             return {
@@ -1069,9 +1253,8 @@ class SharkProtocolEngine:
                 "max_interval_width": max_width,
                 "I_max_4D": float(i_max),
                 "substeps": n_sub,
-                "inside_B4_certified": True,
+                "inside_B4_checked": inside_checked,
             }
-
 
     def step_ode_patankar_mp_interval(
         self,
@@ -1080,7 +1263,7 @@ class SharkProtocolEngine:
         dps: int = 60,
     ) -> Dict[str, Any]:
         """
-        Track A Upgrade (Program 08 & Program 10 Real-Field R vs. IEEE-754 Float64 Interval Bridge):
+        Real-Field R vs. IEEE-754 Float64 Interval Bridge (`step_ode_patankar_mp_interval`):
         Evaluates the cleared-denominator Patankar-Euler fractional step using outward-rounded
         arbitrary-precision interval arithmetic (`mpmath.iv`, default `dps=60` ~ 200 bits) and
         verifies that:
@@ -1088,9 +1271,8 @@ class SharkProtocolEngine:
              `B_4 = [0, gamma_max] x [0, H_max] x [0, I_max_4D] x [0, 1]` with positive lower
              and upper boundary clearance margins (`lean/TypestateLifecycle.lean`:
              `patankar_interval_rounding_in_box`).
-          2. The fast runtime IEEE-754 `float64` 2-ULP enclosure (`[interval_lo, interval_hi]`)
-             from `step_ode_patankar_interval` overlaps and agrees with the 200-bit `mpmath.iv`
-             interval enclosure within `1e-12`.
+          2. The runtime IEEE-754 `float64` step from `step_ode_patankar_interval` agrees with
+             the 200-bit `mpmath.iv` interval enclosure within `1e-12`.
         """
         with self._lock:
             if dt <= 0.0:
@@ -1100,12 +1282,9 @@ class SharkProtocolEngine:
                 raise ValueError("P_0 must be non-negative")
 
             saved_state = self.state.copy()
-            saved_t = self.time_t
 
-            # Run the IEEE-754 float64 2-ULP Patankar-Euler integrator first
             f64_res = self.step_ode_patankar_interval(dt=dt, P_0=p0)
 
-            # Now run the rigorous 200-bit outward-rounded mpmath.iv interval integrator from saved_state
             mp.iv.dps = int(dps)
             n_sub = int(f64_res["substeps"])
             h_iv = mp.iv.mpf(str(dt)) / mp.iv.mpf(n_sub)
@@ -1136,7 +1315,6 @@ class SharkProtocolEngine:
             Peff_max_iv = p0_iv + lsim_iv * rlrsc_iv * gmax_iv + lluc_iv
             Imax_iv = (e_iv * MH_iv + f_iv * Peff_max_iv) / g_iv
 
-            # Exact rational conversion of initial float64 state into 200-bit outward-rounded intervals
             y_iv = [mp.iv.mpf(float(v)) for v in saved_state]
 
             for _ in range(n_sub):
@@ -1186,14 +1364,15 @@ class SharkProtocolEngine:
                 lo_f = float(iv_val.a)
                 hi_f = float(iv_val.b)
                 w_f = float(iv_val.delta)
-                ceil_f = float(ceilings_iv[idx].b)
                 mp_lo.append(lo_f)
                 mp_hi.append(hi_f)
                 mp_widths.append(w_f)
                 if not (iv_val.a >= zero_iv.a and iv_val.b <= ceilings_iv[idx].b):
                     strictly_inside_box = False
                 if abs(f64_res["state_mid"][idx] - 0.5 * (lo_f + hi_f)) > max(1e-9, 10.0 * w_f):
-                    raise RuntimeError(f"Float64 vs mpmath.iv discrepancy on coordinate {idx}: {f64_res['state_mid'][idx]} vs {0.5*(lo_f+hi_f)}")
+                    raise RuntimeError(
+                        f"Float64 vs mpmath.iv discrepancy on coordinate {idx}: {f64_res['state_mid'][idx]} vs {0.5*(lo_f+hi_f)}"
+                    )
 
             if not strictly_inside_box:
                 raise RuntimeError("mpmath.iv outward-rounded interval breached B_4 box boundary!")
@@ -1227,7 +1406,7 @@ class SharkProtocolEngine:
         cert = self.step_ode_patankar_mp_interval(dt=dt, P_0=P_0, dps=dps)
         cert_digest = sha256_canonical(cert)
         entry = self.seal_claim(
-            claim_id=f"shark.track_a.patankar_mp_iv.t_{cert['t']}",
+            claim_id=f"shark.layer2.patankar_mp_iv.t_{cert['t']}",
             claim_text=(
                 f"200-bit outward-rounded mpmath.iv Patankar-Euler interval enclosure certified inside B_4 "
                 f"(max_width={cert['max_mp_iv_width']:.3e}, float64_drift={cert['float64_to_mp_iv_max_drift']:.3e})."
@@ -1242,7 +1421,7 @@ class SharkProtocolEngine:
             evidence=[
                 {"role": "definition", "path": "lean/TypestateLifecycle.lean#patankar_interval_rounding_in_box"},
                 {"role": "interval_certificate", "path": "shark_protocol/kernel.py#step_ode_patankar_mp_interval"},
-                {"role": "verifier", "path": "tests/test_core.py#test_31_track_a_mpmath_iv_200bit_patankar_interval_bridge"},
+                {"role": "verifier", "path": "tests/test_core.py#test_31_mpmath_iv_200bit_patankar_interval_enclosure"},
             ],
             prompt_sha256=cert_digest,
             response_sha256=cert_digest,
@@ -1255,11 +1434,11 @@ class SharkProtocolEngine:
         local_dissipative_rate: Optional[str] = None,
         timestamp_utc: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Run `evaluate_wp19_piecewise_duhamel_study` (Track C) on `data/wp19_segments.json` and seal a `NUMERICAL_OBSERVATION` claim into the VRK ledger."""
+        """Run `evaluate_wp19_piecewise_duhamel_study` on `data/wp19_segments.json` and seal a `NUMERICAL_OBSERVATION` claim into the VRK ledger."""
         study = evaluate_wp19_piecewise_duhamel_study(local_dissipative_rate=local_dissipative_rate)
         study_digest = sha256_canonical(study)
         entry = self.seal_claim(
-            claim_id="shark.track_c.wp19_piecewise_duhamel_parameter_study",
+            claim_id="shark.layer2.wp19_piecewise_duhamel_parameter_study",
             claim_text=(
                 f"Illustrative 120-segment piecewise Duhamel parameter study given assumed rates in data/wp19_segments.json "
                 f"(DOI: 10.5281/zenodo.23034545): remainder {study['piecewise_duhamel_interval_hi']:.3e} vs C500 bound {study['signed_c500_lower_bound']} "
@@ -1361,7 +1540,7 @@ class SharkProtocolEngine:
     @staticmethod
     def verify_and_hash_evidence_list(ev_list: Sequence[Dict[str, str]], check_disk: bool = True) -> Tuple[List[Dict[str, str]], str]:
         """
-        Audit Item 3 Fix: Inspect referenced files and `#anchor` symbols on disk and compute
+        Inspect referenced files and `#anchor` symbols on disk and compute
         each file's on-disk SHA-256 digest (`file_sha256`) and the aggregate `evidence_root`.
         """
         verified_items: List[Dict[str, str]] = []
@@ -1445,14 +1624,19 @@ class SharkProtocolEngine:
                         {"role": "independent_verification", "path": "tests/test_core.py#TestSharkProtocolSuite"},
                     ]
                 else:
-                    raw_ev_list = [{"role": r, "path": "shark_protocol/kernel.py#SharkProtocolEngine"} for r in sorted(REQUIRED_VRK_ROLES[claim_class])]
+                    raw_ev_list = [
+                        {"role": r, "path": "shark_protocol/kernel.py#SharkProtocolEngine"}
+                        for r in sorted(REQUIRED_VRK_ROLES[claim_class])
+                    ]
             else:
                 raw_ev_list = list(evidence)
 
             roles_present = {e.get("role", "") for e in raw_ev_list}
             missing_roles = REQUIRED_VRK_ROLES[claim_class] - roles_present
             if missing_roles:
-                raise ValueError(f"VRK promotion rejected: claim_class {claim_class} missing required roles {sorted(missing_roles)}")
+                raise ValueError(
+                    f"VRK promotion rejected: claim_class {claim_class} missing required roles {sorted(missing_roles)}"
+                )
 
             verified_ev, ev_root = self.verify_and_hash_evidence_list(raw_ev_list, check_disk=True)
 
@@ -1494,7 +1678,7 @@ class SharkProtocolEngine:
                 "signer_pubkey": self.public_key_hex,
             }
             digest = sha256_canonical(record_body)
-            sig = self.signer.sign_digest_hex(digest)
+            sig = self.signer.sign_digest_hex(digest, prev_hash=prev_hash)
             sealed_entry = dict(record_body, digest=digest, ed25519_signature=sig)
             self.ledger.append(sealed_entry)
             if self.ledger_path is not None:
@@ -1511,31 +1695,46 @@ class SharkProtocolEngine:
             f.flush()
             os.fsync(f.fileno())
 
-    def sign_head_record(self) -> Dict[str, Any]:
+    def sign_head_record(self, issued_at: Optional[str] = None) -> Dict[str, Any]:
         """
-        Task B: Produce an Ed25519-signed head commitment `(head_index, ledger_length, head_hash)`
-        so tail truncation of an in-memory or on-disk ledger is deterministically detected.
+        Produce an Ed25519-signed head commitment (`intentseal-vrk-head-v2`) containing
+        `(head_index, ledger_length, head_hash, issued_at)` so tail truncation and stale-head
+        replay attacks are deterministically detected.
         """
         with self._lock:
             if not self.ledger:
                 raise RuntimeError("Cannot sign head record of an empty ledger.")
+            tip_ts = str(self.ledger[-1].get("timestamp_utc", "2026-10-26T00:00:00Z"))
+            if issued_at is not None:
+                ts = str(issued_at)
+            else:
+                now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                ts = max(now_utc, tip_ts) if _is_valid_iso8601_utc(tip_ts) else now_utc
+            if not _is_valid_iso8601_utc(ts):
+                raise ValueError("issued_at must be a valid ISO-8601 UTC timestamp (YYYY-MM-DDTHH:MM:SSZ).")
+
             head_body = {
-                "schema": "intentseal-vrk-head-v1",
+                "schema": "intentseal-vrk-head-v2",
                 "head_index": len(self.ledger) - 1,
                 "ledger_length": len(self.ledger),
                 "head_hash": str(self.ledger[-1]["digest"]),
+                "issued_at": ts,
                 "trust_root": VRK_TRUST_ROOT_DIGEST,
                 "signer_pubkey": self.public_key_hex,
             }
             head_digest = sha256_canonical(head_body)
-            sig = self.signer.sign_digest_hex(head_digest)
+            sig = self.signer.sign_head_digest_hex(
+                head_digest,
+                head_hash=head_body["head_hash"],
+                ledger_length=head_body["ledger_length"],
+            )
             return dict(head_body, head_digest=head_digest, ed25519_signature=sig)
 
     @staticmethod
     def _normalize_trusted_pubkeys(expected_pubkey: Any) -> Optional[Set[str]]:
         if isinstance(expected_pubkey, str):
             k = expected_pubkey.strip().lower()
-            if not _is_hex64(k) or k == RETIRED_V120_PUBKEY_HEX:
+            if not _is_hex64(k) or k == REVOKED_PUBLIC_PUBKEY_HEX:
                 return None
             return {k}
         if isinstance(expected_pubkey, (set, frozenset, list, tuple)):
@@ -1544,11 +1743,67 @@ class SharkProtocolEngine:
                 if not isinstance(item, str):
                     return None
                 k = item.strip().lower()
-                if not _is_hex64(k) or k == RETIRED_V120_PUBKEY_HEX:
+                if not _is_hex64(k) or k == REVOKED_PUBLIC_PUBKEY_HEX:
                     return None
                 out.add(k)
             return out if out else None
         return None
+
+    @classmethod
+    def verify_exported_ledger(
+        cls,
+        chain: Sequence[Dict[str, Any]],
+        signed_head: Dict[str, Any],
+        expected_pubkey: Any,
+        min_length: int = 1,
+        *,
+        min_issued_at: Optional[str] = None,
+        expected_head_hash: Optional[str] = None,
+        check_disk_evidence: bool = True,
+    ) -> Tuple[bool, str]:
+        """
+        Verify an exported ledger with mandatory `signed_head` and `min_length` enforcement.
+        Prevents an attacker from truncating a ledger and either omitting the signed head
+        or replaying an older valid head of shorter length or earlier `issued_at`.
+        """
+        if not isinstance(signed_head, dict) or not signed_head:
+            return False, "Exported ledger verification requires a non-empty signed_head record."
+        if isinstance(min_length, bool) or not isinstance(min_length, int) or min_length < 1:
+            return False, "min_length must be an integer >= 1."
+        if len(chain) < min_length:
+            return (
+                False,
+                f"Ledger truncation or replay detected: chain length {len(chain)} is below required min_length {min_length}.",
+            )
+        head_len = signed_head.get("ledger_length")
+        if not isinstance(head_len, int) or head_len < min_length:
+            return (
+                False,
+                f"Stale signed_head rejected: head ledger_length {head_len} is below required min_length {min_length}.",
+            )
+        issued_at = signed_head.get("issued_at")
+        if not _is_valid_iso8601_utc(issued_at):
+            return False, "signed_head missing valid ISO-8601 UTC issued_at timestamp."
+        if min_issued_at is not None:
+            if not _is_valid_iso8601_utc(min_issued_at):
+                return False, "min_issued_at must be a valid ISO-8601 UTC timestamp."
+            if str(issued_at) < str(min_issued_at):
+                return (
+                    False,
+                    f"Stale signed_head replay rejected: issued_at {issued_at} precedes min_issued_at {min_issued_at}.",
+                )
+        if expected_head_hash is not None:
+            if not _is_hex64(expected_head_hash):
+                return False, "expected_head_hash must be a 64-character lowercase hex SHA-256 digest."
+            if signed_head.get("head_hash") != expected_head_hash or chain[-1].get("digest") != expected_head_hash:
+                return False, "signed_head head_hash mismatch against pinned expected_head_hash."
+
+        return cls.verify_chain_list(
+            chain,
+            check_disk_evidence=check_disk_evidence,
+            signed_head=signed_head,
+            expected_pubkey=expected_pubkey,
+        )
 
     @classmethod
     def verify_chain_list(
@@ -1558,16 +1813,11 @@ class SharkProtocolEngine:
         check_disk_evidence: bool = True,
         *,
         signed_head: Optional[Dict[str, Any]] = None,
-        expected_pubkey: str) -> Tuple[bool, str]:
+        expected_pubkey: Any,
+    ) -> Tuple[bool, str]:
         """
         Verify a ledger sequence against VRK v0.3.1 hash-chain, multi-parent membership,
         prompt/response commitment, on-disk evidence anchor, and Ed25519 signature rules.
-        Audit Item 1, Item 2 & Item 3 Fixes:
-        - Unconditionally requires `entry.get("prev_hash") == parents[0]` for every entry.
-        - Requires every parent hash in `parents` (whether 1 or multiple parents) to exist in
-          `known_digests` (or verified `merged_branch_records` chained from `VRK_TRUST_ROOT_DIGEST`).
-        - Rejects any non-merge entry with `len(parents) != 1` or `parents[0] != expected_prev`.
-        - Verifies `prompt_sha256`, `response_sha256`, on-disk `evidence_root`, and `ed25519_signature`.
         """
         trusted_pubkeys = cls._normalize_trusted_pubkeys(expected_pubkey)
         if not trusted_pubkeys:
@@ -1612,7 +1862,6 @@ class SharkProtocolEngine:
             if parents != sorted(parents) or len(parents) != len(set(parents)):
                 return False, f"Entry {idx} has unsorted or duplicate parent_hashes."
 
-            # Audit Item 1 Fix: ALWAYS require prev_hash == parents[0] regardless of len(parents)
             if entry.get("prev_hash") != parents[0]:
                 return False, f"Entry {idx} prev_hash != parent_hashes[0] mismatch."
 
@@ -1626,7 +1875,6 @@ class SharkProtocolEngine:
                 if parents[0] not in known_digests:
                     return False, f"Entry {idx} references unknown parent {parents[0]}."
             else:
-                # For a Merkle-DAG merge record, verify embedded branch records first if present
                 sub_records = entry.get("merged_branch_records")
                 if not isinstance(sub_records, list) or len(sub_records) == 0:
                     return False, f"Entry {idx} merge claim missing merged_branch_records."
@@ -1671,8 +1919,11 @@ class SharkProtocolEngine:
             known_digests.add(recomputed)
 
         if signed_head is not None:
-            if signed_head.get("schema") != "intentseal-vrk-head-v1":
-                return False, "Invalid signed_head schema."
+            if signed_head.get("schema") != "intentseal-vrk-head-v2":
+                return False, "Invalid signed_head schema (expected intentseal-vrk-head-v2)."
+            issued_at = signed_head.get("issued_at")
+            if not _is_valid_iso8601_utc(issued_at):
+                return False, "signed_head missing valid ISO-8601 UTC issued_at timestamp."
             head_pub = str(signed_head.get("signer_pubkey", "")).lower()
             if head_pub not in trusted_pubkeys:
                 return False, "signed_head signer_pubkey not in pinned expected_pubkey set."
@@ -1690,6 +1941,9 @@ class SharkProtocolEngine:
                 return False, "Ledger tail truncation detected: length/head_index mismatch against signed_head."
             if not chain or chain[-1].get("digest") != signed_head.get("head_hash"):
                 return False, "Ledger tail truncation or head_hash mismatch detected against signed_head."
+            tip_ts = str(chain[-1].get("timestamp_utc", ""))
+            if _is_valid_iso8601_utc(tip_ts) and str(issued_at) < tip_ts:
+                return False, f"signed_head issued_at {issued_at} precedes tip entry timestamp_utc {tip_ts}."
 
         return True, "VRK_HASH_CHAIN_AND_ED25519_VERIFIED"
 
@@ -1733,7 +1987,15 @@ class SharkProtocolEngine:
 
     def verify_ledger_integrity(self) -> Tuple[bool, str]:
         with self._lock:
-            return self.verify_chain_list(self.ledger, expected_pubkey=self.public_key_hex)
+            if not self.ledger:
+                return True, "VRK_HASH_CHAIN_AND_ED25519_VERIFIED"
+            head_rec = self.sign_head_record()
+            return self.verify_exported_ledger(
+                self.ledger,
+                signed_head=head_rec,
+                expected_pubkey=self.public_key_hex,
+                min_length=len(self.ledger),
+            )
 
     @classmethod
     def merge_divergent_ledgers(
@@ -1741,16 +2003,13 @@ class SharkProtocolEngine:
         branch_a: Sequence[Dict[str, Any]],
         branch_b: Sequence[Dict[str, Any]],
         *extra_branches: Sequence[Dict[str, Any]],
-        merge_timestamp_utc: str = "2026-10-25T00:00:00Z",
-        signer: Optional[Ed25519AuthoritySigner] = None,
+        merge_timestamp_utc: str = "2026-10-26T00:00:00Z",
+        signer: Optional[Union[Ed25519AuthoritySigner, IsolatedSignerSubprocess]] = None,
         expected_pubkey: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         N-Way Commutative, Associative, and Idempotent Merkle-DAG Join-Semilattice Reconciliation
         (`lean/TypestateLifecycle.lean`: `merkle_dag_merge_commutative` & `merkle_dag_semilattice_laws`).
-        Validates every input branch, flattens intermediate merge records into their constituent
-        topologically sorted base claim records (`merged_branch_records`), and signs the canonical
-        merge claim with Ed25519.
         """
         auth_signer = signer if signer is not None else Ed25519AuthoritySigner()
         trusted_keys = expected_pubkey if expected_pubkey is not None else {auth_signer.public_key_hex}
@@ -1789,7 +2048,6 @@ class SharkProtocolEngine:
         parents_sorted = sorted(leaf_tips_set)
         all_digests_sorted = sorted(claim_digests_set)
         all_claim_ids_sorted = sorted(claim_ids_set)
-        # Sort base records topologically by (index, digest) so parents always precede children
         merged_branch_records = [
             base_records_by_digest[d]
             for d in sorted(base_records_by_digest.keys(), key=lambda k: (int(base_records_by_digest[k]["index"]), k))
@@ -1800,7 +2058,7 @@ class SharkProtocolEngine:
         raw_ev_list = [
             {"role": "definition", "path": "lean/TypestateLifecycle.lean#merkle_dag_semilattice_laws"},
             {"role": "execution_record", "path": "shark_protocol/kernel.py#merge_divergent_ledgers"},
-            {"role": "independent_replication", "path": "tests/test_core.py#test_25_deep_probe_e_merkle_dag_nway_associativity_and_idempotence"},
+            {"role": "independent_replication", "path": "tests/test_core.py#test_25_merkle_dag_nway_associativity_and_idempotence"},
         ]
         verified_ev, ev_root = cls.verify_and_hash_evidence_list(raw_ev_list, check_disk=True)
 
@@ -1837,7 +2095,7 @@ class SharkProtocolEngine:
             "signer_pubkey": auth_signer.public_key_hex,
         }
         merge_digest = sha256_canonical(merge_body)
-        merge_sig = auth_signer.sign_digest_hex(merge_digest)
+        merge_sig = auth_signer.sign_digest_hex(merge_digest, prev_hash=parents_sorted[0])
         return dict(merge_body, digest=merge_digest, ed25519_signature=merge_sig)
 
     def run_lifecycle_and_redteam_audit(self) -> Dict[str, Any]:
@@ -1858,7 +2116,6 @@ class SharkProtocolEngine:
             uaf_blocked = True
         guard.finish_request(slot1, abort=True)
 
-        # Verify ZEROED_FREED is strictly terminal/absorbing
         terminal_preserved = False
         try:
             slot1.transition(LifecycleEvent.BEGIN_INIT)
@@ -1880,27 +2137,32 @@ class SharkProtocolEngine:
         patankar_res = self.step_ode_patankar_interval(dt=0.05)
         nagumo_res = self.verify_nagumo_boundary_certificate()
 
-        audit_seed = self.signer._seed
+        audit_seed = getattr(self.signer, "_seed", None) or os.urandom(32)
         na = SharkProtocolEngine(signing_seed=audit_seed)
         nb = SharkProtocolEngine(signing_seed=audit_seed)
         nc = SharkProtocolEngine(signing_seed=audit_seed)
-        na.seal_claim("c.a", "Branch A", timestamp_utc="2026-10-25T00:00:00Z")
-        nb.seal_claim("c.b", "Branch B", timestamp_utc="2026-10-25T00:00:00Z")
-        nc.seal_claim("c.c", "Branch C", timestamp_utc="2026-10-25T00:00:00Z")
-        m_ab = self.merge_divergent_ledgers(na.ledger, nb.ledger, signer=self.signer, expected_pubkey=self.public_key_hex)
-        m_bc = self.merge_divergent_ledgers(nb.ledger, nc.ledger, signer=self.signer, expected_pubkey=self.public_key_hex)
-        m_ab_c = self.merge_divergent_ledgers([m_ab], nc.ledger, signer=self.signer, expected_pubkey=self.public_key_hex)
-        m_a_bc = self.merge_divergent_ledgers(na.ledger, [m_bc], signer=self.signer, expected_pubkey=self.public_key_hex)
+        na.seal_claim("c.a", "Branch A", timestamp_utc="2026-10-26T00:00:00Z")
+        nb.seal_claim("c.b", "Branch B", timestamp_utc="2026-10-26T00:00:00Z")
+        nc.seal_claim("c.c", "Branch C", timestamp_utc="2026-10-26T00:00:00Z")
+        m_ab = self.merge_divergent_ledgers(na.ledger, nb.ledger, signer=na.signer, expected_pubkey=na.public_key_hex)
+        m_bc = self.merge_divergent_ledgers(nb.ledger, nc.ledger, signer=na.signer, expected_pubkey=na.public_key_hex)
+        m_ab_c = self.merge_divergent_ledgers([m_ab], nc.ledger, signer=na.signer, expected_pubkey=na.public_key_hex)
+        m_a_bc = self.merge_divergent_ledgers(na.ledger, [m_bc], signer=na.signer, expected_pubkey=na.public_key_hex)
         assoc_ok = (m_ab_c["digest"] == m_a_bc["digest"]) and self.verify_chain_list(
-            [m_ab_c], expected_pubkey=self.public_key_hex
+            [m_ab_c], expected_pubkey=na.public_key_hex
         )[0]
 
         mp_iv_res = self.step_ode_patankar_mp_interval(dt=0.05)
         wp19_res = evaluate_wp19_piecewise_duhamel_study()
         with IsolatedSignerSubprocess(generate_ephemeral=True) as iso_signer:
-            sig_iso = iso_signer.sign_digest_hex(VRK_TRUST_ROOT_DIGEST)
+            sig_iso = iso_signer.sign_digest_hex(
+                hashlib.sha256(b"self_test_entry_1").hexdigest(),
+                prev_hash=VRK_TRUST_ROOT_DIGEST,
+            )
             iso_ok = Ed25519AuthoritySigner.verify_digest_signature(
-                iso_signer.public_key_hex, VRK_TRUST_ROOT_DIGEST, sig_iso
+                iso_signer.public_key_hex,
+                hashlib.sha256(b"self_test_entry_1").hexdigest(),
+                sig_iso,
             ) and (iso_signer._seed is None)
 
         return {
@@ -1908,15 +2170,15 @@ class SharkProtocolEngine:
             "poisoned_destructor_uaf_blocked": uaf_blocked,
             "zeroed_freed_terminal_absorbing": terminal_preserved,
             "stale_worker_epoch_read_blocked": stale_blocked,
-            "patankar_interval_step_certified": patankar_res["inside_B4_certified"],
-            "track_a_mpmath_iv_200bit_certified": mp_iv_res["inside_B4_mp_iv_certified"],
-            "track_b_isolated_signer_subprocess_verified": iso_ok,
-            "track_c_wp19_parameter_study_evaluated": wp19_res["duhamel_remainder_below_c500_bound"],
+            "patankar_interval_step_checked": patankar_res["inside_B4_checked"],
+            "mpmath_iv_200bit_certified": mp_iv_res["inside_B4_mp_iv_certified"],
+            "isolated_signer_subprocess_verified": iso_ok,
+            "wp19_parameter_study_evaluated": wp19_res["duhamel_remainder_below_c500_bound"],
             "nagumo_8face_certified": nagumo_res["all_8_faces_certified"],
             "merkle_dag_nway_associative": assoc_ok,
             "all_checks_passed": (
                 deref_blocked and uaf_blocked and terminal_preserved and stale_blocked
-                and patankar_res["inside_B4_certified"] and mp_iv_res["inside_B4_mp_iv_certified"]
+                and patankar_res["inside_B4_checked"] and mp_iv_res["inside_B4_mp_iv_certified"]
                 and iso_ok and wp19_res["duhamel_remainder_below_c500_bound"]
                 and nagumo_res["all_8_faces_certified"] and assoc_ok
             ),

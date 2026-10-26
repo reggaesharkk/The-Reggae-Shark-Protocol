@@ -1,4 +1,4 @@
-name: Shark Protocol Verification & Lean 4 CI (v1.3.1)
+name: Shark Protocol Verification & Lean 4 CI (v1.3.2)
 
 on:
   push:
@@ -9,6 +9,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   python-verification-and-manifest:
@@ -31,32 +34,38 @@ jobs:
           sha256sum -c MANIFEST_SHA256.txt
           python3 tools/check_lean_axioms.py --source-only
 
-      - name: Install pinned Python dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run full 38-test unit, red-team, differential & axiom suite
+      - name: Run full 42-test unit, differential & security suite
         run: |
-          python -m unittest discover -s tests -v
+          python -W default -m unittest discover -s tests -v
 
-      - name: Run CLI lifecycle and red-team self-audit
+      - name: Run CLI lifecycle and verification self-test
         run: |
           python -m shark_protocol.cli --cli --audit-lifecycle
 
   lean4-formal-proofs-and-axioms:
-    name: Lean 4 (41 Theorems + AxiomsCheck Gate)
+    name: Lean 4 (42 Theorems + AxiomsCheck + Transition Table Diff)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Install elan and build 41 zero-sorry Lean 4 theorems
-        uses: leanprover/lean-action@f807b338d95de7813c5c50d018f1c23c9b93b4ec # v1.2.0
+      - name: Install elan and build 42 zero-sorry Lean 4 theorems
+        uses: leanprover/lean-action@f807b338d95de7813c5c50d018f1c23c9b93b4ec
         with:
           build-args: ExistenceVerification BoundaryVerification TypestateLifecycle AxiomsCheck
 
-      - name: Capture lake env lean lean/AxiomsCheck.lean and verify axiom subset
+      - name: Verify Lean #eval transition table matches data/lean_transition_table.json
+        run: |
+          export PATH="$HOME/.elan/bin:$PATH"
+          lake env lean lean/TypestateLifecycle.lean | tee /tmp/lean_eval_output.txt
+          python3 tools/check_lean_axioms.py --check-transition-table /tmp/lean_eval_output.txt
+
+      - name: Capture lake env lean lean/AxiomsCheck.lean and verify axiom subset (42/42)
         run: |
           export PATH="$HOME/.elan/bin:$PATH"
           lake env lean lean/AxiomsCheck.lean | tee /tmp/lean_axioms_output.txt
