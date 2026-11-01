@@ -1,3 +1,11 @@
+<p align="center"><a href="https://github.com/reggaesharkk/Reggae-shark-universe-"><img src="https://raw.githubusercontent.com/reggaesharkk/Reggae-shark-universe-/main/assets/universe_bar.svg" alt="Reggae Shark Universe — public research map" width="100%" /></a></p>
+
+<p align="center"><a href="https://github.com/reggaesharkk/Reggae-shark-universe-">Public research map</a> &nbsp;·&nbsp; <a href="https://github.com/reggaesharkk?tab=repositories">All public repositories</a> &nbsp;·&nbsp; <a href="https://orcid.org/0009-0002-1170-4487">ORCID</a></p>
+
+> I keep each project’s evidence, scope, and open questions alongside the work.
+
+---
+
 # The Reggae Shark Protocol (`v1.3.2`)
 
 **Author:** Prince Upadhyay ([ORCID: 0009-0002-1170-4487](https://orcid.org/0009-0002-1170-4487) · `starxshark@gmail.com`)  
