@@ -31,6 +31,7 @@ jobs:
 
       - name: Verify UTF-8 without BOM, LF line endings, and MANIFEST_SHA256.txt
         run: |
+          python3 tools/make_manifest.py --check
           sha256sum -c MANIFEST_SHA256.txt
           python3 tools/check_lean_axioms.py --source-only
 

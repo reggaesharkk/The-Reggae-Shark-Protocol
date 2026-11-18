@@ -83,6 +83,7 @@ The repository compiles **42 zero-`sorry` Lean 4 theorems** across three modules
 
 ```bash
 # 1. Verify SHA-256 manifest and Lean axiom registration (42/42 theorems):
+python3 tools/make_manifest.py --check
 sha256sum -c MANIFEST_SHA256.txt
 python3 tools/check_lean_axioms.py --source-only
 
